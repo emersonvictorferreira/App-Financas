@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Financeiro Mobile</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero-card">
+        <p class="eyebrow">Automação financeira</p>
+        <h1>Seu extrato direto no Google Sheets</h1>
+        <p class="lead">
+          Um app simples para celular, com dois botões: importar PDF do banco ou atualizar os dados via Pluggy.
+        </p>
+
+        <div class="action-grid">
+          <label class="action-card">
+            <input id="pdf-input" type="file" accept="application/pdf" hidden>
+            <span class="action-title">Enviar PDF</span>
+            <span class="action-copy">Escolha o extrato e envie para a aba do mês certo.</span>
+          </label>
+
+          <button id="pluggy-button" class="action-card button-card" type="button">
+            <span class="action-title">Atualizar Pluggy</span>
+            <span class="action-copy">Busca transações online e lança tudo automaticamente.</span>
+          </button>
+        </div>
+
+        <div id="status" class="status-panel" aria-live="polite">
+          Conecte suas credenciais no `.env` para ativar o envio automático.
+        </div>
+
+        <section class="result-card">
+          <div class="result-header">
+            <h2>Últimos lançamentos</h2>
+            <span id="result-count">0 itens</span>
+          </div>
+          <div id="result-list" class="result-list">
+            <p class="empty-state">Os lançamentos importados vão aparecer aqui.</p>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>
