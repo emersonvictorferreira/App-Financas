@@ -4,6 +4,8 @@ const statusPanel = document.getElementById("status");
 const resultList = document.getElementById("result-list");
 const resultCount = document.getElementById("result-count");
 
+warmUpBackend();
+
 pdfInput.addEventListener("change", async (event) => {
   const [file] = event.target.files;
   if (!file) return;
@@ -33,7 +35,13 @@ async function sendRequest(url, options) {
   setStatus("Processando...");
 
   try {
-    const response = await fetch(url, options);
+    let response = await fetch(url, options);
+    if (response.status === 502 || response.status === 503) {
+      setStatus("Servidor acordando no Render. Tentando novamente...", true);
+      await delay(6000);
+      response = await fetch(url, options);
+    }
+
     const payload = await parseResponse(response);
 
     if (!response.ok) {
@@ -46,9 +54,21 @@ async function sendRequest(url, options) {
     renderTransactions(payload.transactions || []);
   } catch (error) {
     setStatus(
-      "Nao foi possivel concluir a operacao. Se estiver no iPhone, tente novamente em alguns segundos.",
+      "Nao foi possivel concluir a operacao. Se estiver no iPhone, aguarde alguns segundos e tente novamente.",
       true
     );
+  }
+}
+
+async function warmUpBackend() {
+  try {
+    const response = await fetch("/api/health", { cache: "no-store" });
+    if (response.ok) {
+      const data = await response.json();
+      setStatus(data.message || "Servidor online.");
+    }
+  } catch {
+    setStatus("Servidor iniciando no Render. Aguarde alguns segundos.", true);
   }
 }
 
@@ -103,4 +123,8 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
