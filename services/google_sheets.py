@@ -90,10 +90,24 @@ class GoogleSheetsService:
             return 0
 
         sheet_name = _normalize_sheet_name(month_name)
-        start_row, end_row = 4, 13
-        values = self._get_range_values(service, f"{sheet_name}!G{start_row}:I{end_row}")
         grouped = _group_income_sources(transactions)
+        start_row = 4
+        total_row = self._find_income_total_row(service, sheet_name)
+        end_row = total_row - 1
+
+        values = self._get_range_values(service, f"{sheet_name}!G{start_row}:I{end_row}")
         existing = _existing_income_rows(values, start_row)
+
+        new_transactions = [transaction for transaction in grouped if _normalized_text(transaction.description) not in existing]
+        required_rows = len(existing) + len(new_transactions)
+        available_rows = max(0, end_row - start_row + 1)
+        if required_rows > available_rows:
+            rows_to_insert = required_rows - available_rows
+            self._insert_rows_before(service, sheet_name, total_row, rows_to_insert)
+            total_row += rows_to_insert
+            end_row = total_row - 1
+            values = self._get_range_values(service, f"{sheet_name}!G{start_row}:I{end_row}")
+            existing = _existing_income_rows(values, start_row)
 
         changed = 0
         for transaction in grouped:
@@ -110,7 +124,6 @@ class GoogleSheetsService:
                     changed += 1
 
         next_row = _find_next_empty_row(values, start_row)
-        new_transactions = [transaction for transaction in grouped if _normalized_text(transaction.description) not in existing]
         batch = new_transactions[: max(0, end_row - next_row + 1)]
         if batch:
             service.spreadsheets().values().update(
@@ -128,6 +141,49 @@ class GoogleSheetsService:
             range=target_range,
         ).execute()
         return response.get("values", [])
+
+    def _find_income_total_row(self, service, sheet_name: str) -> int:
+        values = self._get_range_values(service, f"{sheet_name}!G4:G200")
+        row_number = 4
+        for row in values:
+            cell_value = _normalized_text(row[0] if row else "")
+            if cell_value == "total":
+                return row_number
+            row_number += 1
+        raise ValueError(f"Nao foi possivel localizar a linha TOTAL na aba {sheet_name}.")
+
+    def _insert_rows_before(self, service, sheet_name: str, row_number: int, amount: int) -> None:
+        if amount <= 0:
+            return
+
+        sheet_id = self._get_sheet_id(service, sheet_name)
+        start_index = row_number - 1
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id,
+            body={
+                "requests": [
+                    {
+                        "insertDimension": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "dimension": "ROWS",
+                                "startIndex": start_index,
+                                "endIndex": start_index + amount,
+                            },
+                            "inheritFromBefore": True,
+                        }
+                    }
+                ]
+            },
+        ).execute()
+
+    def _get_sheet_id(self, service, sheet_name: str) -> int:
+        response = service.spreadsheets().get(spreadsheetId=self.spreadsheet_id).execute()
+        for sheet in response.get("sheets", []):
+            properties = sheet.get("properties", {})
+            if properties.get("title") == sheet_name:
+                return properties["sheetId"]
+        raise ValueError(f"Nao foi possivel localizar a aba {sheet_name}.")
 
     def _build_service(self):
         if self.service_account_json:
