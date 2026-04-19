@@ -104,7 +104,7 @@ class GoogleSheetsService:
         if required_rows > available_rows:
             rows_to_insert = required_rows - available_rows
             self._insert_rows_before(service, sheet_name, total_row, rows_to_insert)
-            self._copy_income_row_format(service, sheet_name, end_row, total_row, rows_to_insert)
+            self._copy_income_row_layout(service, sheet_name, end_row, total_row, rows_to_insert)
             total_row += rows_to_insert
             end_row = total_row - 1
             values = self._get_range_values(service, f"{sheet_name}!G{start_row}:I{end_row}")
@@ -180,37 +180,54 @@ class GoogleSheetsService:
             },
         ).execute()
 
-    def _copy_income_row_format(self, service, sheet_name: str, template_row: int, destination_row: int, amount: int) -> None:
+    def _copy_income_row_layout(self, service, sheet_name: str, template_row: int, destination_row: int, amount: int) -> None:
         if amount <= 0:
             return
 
         sheet_id = self._get_sheet_id(service, sheet_name)
+        requests = [
+            {
+                "copyPaste": {
+                    "source": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": template_row - 1,
+                        "endRowIndex": template_row,
+                        "startColumnIndex": 6,
+                        "endColumnIndex": 9,
+                    },
+                    "destination": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": destination_row - 1,
+                        "endRowIndex": destination_row - 1 + amount,
+                        "startColumnIndex": 6,
+                        "endColumnIndex": 9,
+                    },
+                    "pasteType": "PASTE_FORMAT",
+                    "pasteOrientation": "NORMAL",
+                }
+            }
+        ]
+
+        pixel_size = self._get_row_height(service, sheet_name, template_row)
+        if pixel_size is not None:
+            requests.append(
+                {
+                    "updateDimensionProperties": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "dimension": "ROWS",
+                            "startIndex": destination_row - 1,
+                            "endIndex": destination_row - 1 + amount,
+                        },
+                        "properties": {"pixelSize": pixel_size},
+                        "fields": "pixelSize",
+                    }
+                }
+            )
+
         service.spreadsheets().batchUpdate(
             spreadsheetId=self.spreadsheet_id,
-            body={
-                "requests": [
-                    {
-                        "copyPaste": {
-                            "source": {
-                                "sheetId": sheet_id,
-                                "startRowIndex": template_row - 1,
-                                "endRowIndex": template_row,
-                                "startColumnIndex": 6,
-                                "endColumnIndex": 9,
-                            },
-                            "destination": {
-                                "sheetId": sheet_id,
-                                "startRowIndex": destination_row - 1,
-                                "endRowIndex": destination_row - 1 + amount,
-                                "startColumnIndex": 6,
-                                "endColumnIndex": 9,
-                            },
-                            "pasteType": "PASTE_FORMAT",
-                            "pasteOrientation": "NORMAL",
-                        }
-                    }
-                ]
-            },
+            body={"requests": requests},
         ).execute()
 
     def _sync_income_total_formula(self, service, sheet_name: str, start_row: int, total_row: int) -> None:
@@ -228,6 +245,24 @@ class GoogleSheetsService:
             if properties.get("title") == sheet_name:
                 return properties["sheetId"]
         raise ValueError(f"Nao foi possivel localizar a aba {sheet_name}.")
+
+    def _get_row_height(self, service, sheet_name: str, row_number: int) -> int | None:
+        response = service.spreadsheets().get(
+            spreadsheetId=self.spreadsheet_id,
+            ranges=[f"{sheet_name}!G{row_number}:I{row_number}"],
+            fields="sheets(data(rowMetadata(pixelSize),startRow),properties(title))",
+        ).execute()
+        for sheet in response.get("sheets", []):
+            if sheet.get("properties", {}).get("title") != sheet_name:
+                continue
+            data = sheet.get("data", [])
+            if not data:
+                continue
+            row_metadata = data[0].get("rowMetadata", [])
+            if not row_metadata:
+                continue
+            return row_metadata[0].get("pixelSize")
+        return None
 
     def _build_service(self):
         if self.service_account_json:
