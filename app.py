@@ -161,6 +161,8 @@ def _google_error_response(exc: HttpError, transactions) -> tuple:
     status_code = getattr(exc.resp, "status", 500)
     if status_code == 403:
         message = "O Google Sheets recusou a escrita. Verifique as permissoes da conta de servico."
+    elif status_code == 429:
+        message = "O Google Sheets atingiu o limite temporario de escritas. Aguarde um minuto e tente novamente."
     else:
         message = f"Erro do Google Sheets: {exc}"
 

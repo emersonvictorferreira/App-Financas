@@ -66,8 +66,6 @@ class GoogleSheetsService:
         sheet_name = _normalize_sheet_name(month_name)
         start_row, end_row = 22, 92
         values = self._get_range_values(service, f"{sheet_name}!L{start_row}:Q{end_row}")
-        self._fix_existing_dropdown_values(service, sheet_name, values, start_row)
-        values = self._get_range_values(service, f"{sheet_name}!L{start_row}:Q{end_row}")
 
         existing_signatures = {_expense_signature(row) for row in values if row}
         pending = [transaction for transaction in transactions if _expense_signature(transaction.to_expense_row()) not in existing_signatures]
@@ -86,31 +84,6 @@ class GoogleSheetsService:
             body={"values": [transaction.to_expense_row() for transaction in batch]},
         ).execute()
         return len(batch)
-
-    def _fix_existing_dropdown_values(self, service, sheet_name: str, values: list[list[str]], start_row: int) -> None:
-        updates: list[tuple[int, str, str]] = []
-        row_number = start_row
-        for row in values:
-            if row and any(str(cell).strip() for cell in row):
-                raw_category = _normalized_text(row[3] if len(row) > 3 else "")
-                raw_payment = _normalized_text(row[4] if len(row) > 4 else "")
-                raw_essential = _normalized_text(row[5] if len(row) > 5 else "")
-
-                if raw_category in {"pix", "outros", "🧾 outros", "ðÿ§¾ outros"}:
-                    updates.append((row_number, "O", "🧾 Outros"))
-                if raw_payment in {"pix", "dinheiro / pix", "dinheiro/pix", "💸 dinheiro / pix", "ðÿ’¸ dinheiro / pix"}:
-                    updates.append((row_number, "P", "💸 Dinheiro / Pix"))
-                if raw_essential in {"sim", "nao", "não", "", "✔️", "âœ”ï¸"}:
-                    updates.append((row_number, "Q", "✔️"))
-            row_number += 1
-
-        for row_number, column_letter, value in updates:
-            service.spreadsheets().values().update(
-                spreadsheetId=self.spreadsheet_id,
-                range=f"{sheet_name}!{column_letter}{row_number}",
-                valueInputOption="USER_ENTERED",
-                body={"values": [[value]]},
-            ).execute()
 
     def _write_incomes(self, service, month_name: str, transactions: list[Transaction]) -> int:
         if not transactions:
