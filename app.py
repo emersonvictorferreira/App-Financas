@@ -6,6 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
 from googleapiclient.errors import HttpError
+from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
 from services.google_sheets import GoogleSheetsService
@@ -51,6 +52,11 @@ def index():
     return render_template("index.html")
 
 
+@app.get("/api/health")
+def health():
+    return jsonify({"ok": True, "message": "Servidor online."})
+
+
 @app.post("/api/upload-pdf")
 def upload_pdf():
     uploaded = request.files.get("pdf")
@@ -70,7 +76,7 @@ def upload_pdf():
         return jsonify(
             {
                 "ok": False,
-                "message": "PDF recebido, mas falta configurar o Google Sheets no arquivo .env.",
+                "message": "PDF recebido, mas falta configurar o Google Sheets.",
                 "transactions": [transaction.to_dict() for transaction in transactions],
             }
         ), 400
@@ -80,7 +86,13 @@ def upload_pdf():
     except HttpError as exc:
         return _google_error_response(exc, transactions)
     except Exception as exc:
-        return jsonify({"ok": False, "message": f"Erro ao enviar PDF para o Google Sheets: {exc}"}), 500
+        return jsonify(
+            {
+                "ok": False,
+                "message": f"Erro ao enviar PDF para o Google Sheets: {exc}",
+                "transactions": [transaction.to_dict() for transaction in transactions],
+            }
+        ), 500
 
     return jsonify(
         {
@@ -106,7 +118,7 @@ def sync_pluggy():
         return jsonify(
             {
                 "ok": False,
-                "message": "Pluggy conectou, mas falta configurar o Google Sheets no arquivo .env.",
+                "message": "Pluggy conectou, mas falta configurar o Google Sheets.",
                 "transactions": [transaction.to_dict() for transaction in transactions],
             }
         ), 400
@@ -116,7 +128,13 @@ def sync_pluggy():
     except HttpError as exc:
         return _google_error_response(exc, transactions)
     except Exception as exc:
-        return jsonify({"ok": False, "message": f"Erro ao sincronizar Pluggy com Google Sheets: {exc}"}), 500
+        return jsonify(
+            {
+                "ok": False,
+                "message": f"Erro ao sincronizar Pluggy com Google Sheets: {exc}",
+                "transactions": [transaction.to_dict() for transaction in transactions],
+            }
+        ), 500
 
     return jsonify(
         {
@@ -127,13 +145,22 @@ def sync_pluggy():
     )
 
 
+@app.errorhandler(RequestEntityTooLarge)
+def handle_large_file(_error):
+    return jsonify({"ok": False, "message": "O arquivo excede o limite de 10 MB.", "transactions": []}), 413
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    if isinstance(error, HttpError):
+        return _google_error_response(error, [])
+    return jsonify({"ok": False, "message": f"Erro interno: {error}", "transactions": []}), 500
+
+
 def _google_error_response(exc: HttpError, transactions) -> tuple:
     status_code = getattr(exc.resp, "status", 500)
     if status_code == 403:
-        message = (
-            "O Google Sheets recusou a escrita. Compartilhe a planilha com a conta de servico "
-            "como Editor e tente novamente."
-        )
+        message = "O Google Sheets recusou a escrita. Verifique as permissoes da conta de servico."
     else:
         message = f"Erro do Google Sheets: {exc}"
 

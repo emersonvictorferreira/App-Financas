@@ -8,6 +8,12 @@ pdfInput.addEventListener("change", async (event) => {
   const [file] = event.target.files;
   if (!file) return;
 
+  if (file.size > 10 * 1024 * 1024) {
+    setStatus("O PDF excede o limite de 10 MB.", true);
+    pdfInput.value = "";
+    return;
+  }
+
   const formData = new FormData();
   formData.append("pdf", file);
   await sendRequest("/api/upload-pdf", {
@@ -25,14 +31,39 @@ pluggyButton.addEventListener("click", async () => {
 
 async function sendRequest(url, options) {
   setStatus("Processando...");
+
   try {
     const response = await fetch(url, options);
-    const data = await response.json();
-    setStatus(data.message || "Concluído.", !response.ok);
-    renderTransactions(data.transactions || []);
+    const payload = await parseResponse(response);
+
+    if (!response.ok) {
+      setStatus(payload.message || "A operacao falhou.", true);
+      renderTransactions(payload.transactions || []);
+      return;
+    }
+
+    setStatus(payload.message || "Concluido.");
+    renderTransactions(payload.transactions || []);
   } catch (error) {
-    setStatus("Não foi possível concluir a operação. Verifique o backend.", true);
+    setStatus(
+      "Nao foi possivel concluir a operacao. Se estiver no iPhone, tente novamente em alguns segundos.",
+      true
+    );
   }
+}
+
+async function parseResponse(response) {
+  const contentType = response.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    return response.json();
+  }
+
+  const text = await response.text();
+  return {
+    message: text || `Erro ${response.status}`,
+    transactions: [],
+  };
 }
 
 function setStatus(message, isError = false) {
@@ -47,7 +78,7 @@ function renderTransactions(transactions) {
   resultCount.textContent = `${transactions.length} item${transactions.length === 1 ? "" : "s"}`;
 
   if (!transactions.length) {
-    resultList.innerHTML = '<p class="empty-state">Nenhum lançamento retornado nesta operação.</p>';
+    resultList.innerHTML = '<p class="empty-state">Nenhum lancamento retornado nesta operacao.</p>';
     return;
   }
 
@@ -57,7 +88,7 @@ function renderTransactions(transactions) {
         <article class="result-item">
           <strong>${escapeHtml(transaction.description)}</strong>
           <div class="result-meta">
-            R$ ${Number(transaction.amount || 0).toFixed(2)} • ${escapeHtml(transaction.date)} • ${escapeHtml(transaction.category || "")}
+            R$ ${Number(transaction.amount || 0).toFixed(2)} - ${escapeHtml(transaction.date)} - ${escapeHtml(transaction.category || "")}
           </div>
         </article>
       `
