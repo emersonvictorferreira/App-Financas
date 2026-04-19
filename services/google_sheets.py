@@ -104,6 +104,7 @@ class GoogleSheetsService:
         if required_rows > available_rows:
             rows_to_insert = required_rows - available_rows
             self._insert_rows_before(service, sheet_name, total_row, rows_to_insert)
+            self._copy_income_row_format(service, sheet_name, end_row, total_row, rows_to_insert)
             total_row += rows_to_insert
             end_row = total_row - 1
             values = self._get_range_values(service, f"{sheet_name}!G{start_row}:I{end_row}")
@@ -133,6 +134,8 @@ class GoogleSheetsService:
                 body={"values": [transaction.to_income_row() for transaction in batch]},
             ).execute()
             changed += len(batch)
+
+        self._sync_income_total_formula(service, sheet_name, start_row, total_row)
         return changed
 
     def _get_range_values(self, service, target_range: str) -> list[list[str]]:
@@ -175,6 +178,47 @@ class GoogleSheetsService:
                     }
                 ]
             },
+        ).execute()
+
+    def _copy_income_row_format(self, service, sheet_name: str, template_row: int, destination_row: int, amount: int) -> None:
+        if amount <= 0:
+            return
+
+        sheet_id = self._get_sheet_id(service, sheet_name)
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id,
+            body={
+                "requests": [
+                    {
+                        "copyPaste": {
+                            "source": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": template_row - 1,
+                                "endRowIndex": template_row,
+                                "startColumnIndex": 6,
+                                "endColumnIndex": 9,
+                            },
+                            "destination": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": destination_row - 1,
+                                "endRowIndex": destination_row - 1 + amount,
+                                "startColumnIndex": 6,
+                                "endColumnIndex": 9,
+                            },
+                            "pasteType": "PASTE_FORMAT",
+                            "pasteOrientation": "NORMAL",
+                        }
+                    }
+                ]
+            },
+        ).execute()
+
+    def _sync_income_total_formula(self, service, sheet_name: str, start_row: int, total_row: int) -> None:
+        service.spreadsheets().values().update(
+            spreadsheetId=self.spreadsheet_id,
+            range=f"{sheet_name}!G{total_row}:I{total_row}",
+            valueInputOption="USER_ENTERED",
+            body={"values": [["TOTAL", "", f"=SUM(I{start_row}:I{total_row - 1})"]]},
         ).execute()
 
     def _get_sheet_id(self, service, sheet_name: str) -> int:
