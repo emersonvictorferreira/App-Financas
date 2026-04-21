@@ -30,6 +30,7 @@ class GoogleSheetsServiceTests(unittest.TestCase):
         self.service._get_range_values = Mock(return_value=existing_rows)
         self.service._insert_rows_before = Mock()
         self.service._get_sheet_row_count = Mock(return_value=51)
+        self.service._normalize_expense_block_layout = Mock()
         self.values_api.update.return_value.execute.return_value = {}
         self.values_api.clear.return_value.execute.return_value = {}
 
@@ -47,6 +48,7 @@ class GoogleSheetsServiceTests(unittest.TestCase):
         self.service._find_expense_start_row = Mock(return_value=50)
         self.service._get_range_values = Mock(return_value=existing_rows)
         self.service._get_sheet_row_count = Mock(return_value=500)
+        self.service._normalize_expense_block_layout = Mock()
         self.values_api.clear.return_value.execute.return_value = {}
 
         inserted = self.service._write_expenses(self.api, "ABRIL", [duplicate])

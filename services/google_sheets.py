@@ -85,6 +85,7 @@ class GoogleSheetsService:
                 valueInputOption="USER_ENTERED",
                 body={"values": [transaction.to_expense_row() for transaction in batch]},
             ).execute()
+            self._normalize_expense_block_layout(service, sheet_name, start_row, start_row + len(batch) - 1)
 
         previous_signatures = {_expense_signature(transaction.to_expense_row()) for transaction in existing_transactions}
         current_signatures = {_expense_signature(transaction.to_expense_row()) for transaction in batch}
@@ -298,6 +299,95 @@ class GoogleSheetsService:
                             "dimension": "ROWS",
                             "startIndex": destination_row - 1,
                             "endIndex": destination_row - 1 + amount,
+                        },
+                        "properties": {"pixelSize": pixel_size},
+                        "fields": "pixelSize",
+                    }
+                }
+            )
+
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id,
+            body={"requests": requests},
+        ).execute()
+
+    def _normalize_expense_block_layout(self, service, sheet_name: str, start_row: int, end_row: int) -> None:
+        if end_row < start_row:
+            return
+
+        sheet_id = self._get_sheet_id(service, sheet_name)
+        first_template_row = start_row
+        body_template_row = start_row + 1 if end_row > start_row else start_row
+
+        requests = [
+            {
+                "copyPaste": {
+                    "source": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": body_template_row - 1,
+                        "endRowIndex": body_template_row,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "destination": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": start_row - 1,
+                        "endRowIndex": end_row,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "pasteType": "PASTE_FORMAT",
+                    "pasteOrientation": "NORMAL",
+                }
+            },
+            {
+                "copyPaste": {
+                    "source": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": first_template_row - 1,
+                        "endRowIndex": first_template_row,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "destination": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": start_row - 1,
+                        "endRowIndex": start_row,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "pasteType": "PASTE_FORMAT",
+                    "pasteOrientation": "NORMAL",
+                }
+            },
+            {
+                "updateBorders": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": end_row - 1,
+                        "endRowIndex": end_row,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "bottom": {
+                        "style": "SOLID",
+                        "width": 1,
+                        "color": {},
+                    },
+                }
+            },
+        ]
+
+        pixel_size = self._get_row_height(service, sheet_name, body_template_row)
+        if pixel_size is not None:
+            requests.append(
+                {
+                    "updateDimensionProperties": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "dimension": "ROWS",
+                            "startIndex": start_row - 1,
+                            "endIndex": end_row,
                         },
                         "properties": {"pixelSize": pixel_size},
                         "fields": "pixelSize",
