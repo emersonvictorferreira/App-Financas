@@ -60,9 +60,9 @@ class Transaction:
     description: str
     amount: float
     date: str
-    category: str = "\U0001F9FE Outros"
-    payment_method: str = "\U0001F4B8 Dinheiro / Pix"
-    essential: str = "\u2714\ufe0f"
+    category: str = "🧾 Outros"
+    payment_method: str = "💸 Dinheiro / Pix"
+    essential: str = "✔️"
     kind: str = "expense"
 
     def to_expense_row(self) -> list[str | float]:
@@ -106,7 +106,7 @@ def parse_statement_pdf(pdf_path: Path) -> list[Transaction]:
             date=today,
             category="Revisar PDF",
             payment_method="Conta bancaria",
-            essential="\u2714\ufe0f",
+            essential="✔️",
             kind="expense",
         )
     ]
@@ -151,7 +151,7 @@ def _parse_nubank_statement(lines: list[str]) -> list[Transaction]:
                 date=current_date,
                 category=_detect_category(description),
                 payment_method=_detect_payment_method(description),
-                essential="\u2714\ufe0f",
+                essential="✔️",
                 kind=kind,
             )
         )
@@ -232,7 +232,7 @@ def _is_account_number_fragment(line: str, description_parts: list[str], next_li
 
 def _compact_description(description: str, kind: str) -> str:
     cleaned = re.sub(r"\s+", " ", description).strip()
-    debit_match = re.search(r"Compra no d[eé]bito(?: via [^ ]+)? (.+)", cleaned, re.IGNORECASE)
+    debit_match = re.search(r"Compra no d[ée]bito(?: via [^ ]+)? (.+)", cleaned, re.IGNORECASE)
     if debit_match:
         merchant = _shorten_name(debit_match.group(1).strip())
         return _limit_text(f"Debito {merchant}", 20)
@@ -241,15 +241,16 @@ def _compact_description(description: str, kind: str) -> str:
     if pix_match:
         tail = pix_match.group(1)
         name = re.split(r"\s-\s", tail, maxsplit=1)[0].strip(" -")
+        name = re.sub(r"\b(?:cpf|cnpj|banco|agencia|agência|conta)\b.*$", "", name, flags=re.IGNORECASE).strip(" -")
         name = _shorten_name(name)
         prefix = "Pix para" if kind == "expense" else "Pix de"
-        return _limit_text(f"{prefix} {name}", 20)
+        return _limit_text(f"{prefix} {name}", 24)
 
     pagamento_match = re.search(r"Pagamento (.+)", cleaned, re.IGNORECASE)
     if pagamento_match:
         return _limit_text(_shorten_name(pagamento_match.group(1).strip()), 20)
 
-    return _limit_text(_shorten_name(cleaned), 20)
+    return _limit_text(_shorten_name(cleaned), 24)
 
 
 def _shorten_name(text: str) -> str:
@@ -277,8 +278,10 @@ def _shorten_name(text: str) -> str:
     if len(words) == 1:
         return words[0]
 
-    if words[0].upper() == words[0] and len(words[0]) <= 12:
-        return words[0]
+    if len(words) >= 2:
+        first_two = " ".join(words[:2])
+        if len(first_two) <= 18:
+            return first_two
 
     return " ".join(words[:2])
 
@@ -302,23 +305,23 @@ def _parse_currency(value: str) -> float:
 def _detect_category(description: str) -> str:
     lowered = description.lower()
     if "restaurante" in lowered or "spotify" in lowered:
-        return "\U0001F37D\ufe0f Alimentacao"
+        return "🍽️ Alimentacao"
     if "claro" in lowered or "mercado pago" in lowered:
-        return "\u26a1 Servicos domesticos"
+        return "⚡ Servicos domesticos"
     if "mercado" in lowered:
-        return "\U0001F6D2 Supermercado"
+        return "🛒 Supermercado"
     if "phoenix" in lowered or "soriginal" in lowered:
-        return "\U0001F389 Lazer"
-    return "\U0001F9FE Outros"
+        return "🎉 Lazer"
+    return "🧾 Outros"
 
 
 def _detect_payment_method(description: str) -> str:
     lowered = description.lower()
     if "compra no débito" in lowered or "compra no debito" in lowered:
-        return "\U0001F4B3 Débito"
+        return "💳 Débito"
     if "pix" in lowered:
-        return "\U0001F4B8 Dinheiro / Pix"
-    return "\U0001F4B2 Boleto"
+        return "💸 Dinheiro / Pix"
+    return "💲 Boleto"
 
 
 def _is_inline_transaction_description(text: str) -> bool:
