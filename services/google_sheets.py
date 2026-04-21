@@ -383,14 +383,22 @@ def _merge_income_sources(transactions: list[Transaction]) -> list[Transaction]:
     for transaction in transactions:
         key = _income_source_key(transaction.description)
         current = grouped.get(key)
+        canonical_description = _canonical_income_description(transaction.description)
         if current is None:
-            grouped[key] = transaction
+            grouped[key] = Transaction(
+                description=canonical_description,
+                amount=transaction.amount,
+                date=transaction.date,
+                category=transaction.category,
+                payment_method=transaction.payment_method,
+                essential=transaction.essential,
+                kind="income",
+            )
             continue
 
-        best_description = _prefer_income_description(current.description, transaction.description)
         best_amount = max(current.amount, transaction.amount)
         grouped[key] = Transaction(
-            description=best_description,
+            description=current.description,
             amount=round(best_amount, 2),
             date=current.date,
             category=current.category,
@@ -400,19 +408,6 @@ def _merge_income_sources(transactions: list[Transaction]) -> list[Transaction]:
         )
 
     return sorted(grouped.values(), key=lambda transaction: _normalized_text(transaction.description))
-
-
-def _prefer_income_description(current: str, candidate: str) -> str:
-    current_clean = _display_score(current)
-    candidate_clean = _display_score(candidate)
-    return candidate if candidate_clean > current_clean else current
-
-
-def _display_score(value: str) -> tuple[int, int]:
-    cleaned = _normalized_text(value)
-    has_ellipsis = int("..." not in cleaned)
-    token_count = len(cleaned.split())
-    return has_ellipsis, token_count
 
 
 def _month_name_from_date(date_str: str) -> str:
@@ -449,3 +444,47 @@ def _income_source_key(value: str) -> str:
 
 def _strip_accents(value: str) -> str:
     return "".join(char for char in unicodedata.normalize("NFKD", value) if not unicodedata.combining(char))
+
+
+def _canonical_income_description(value: str) -> str:
+    raw = _strip_accents(_normalized_text(value))
+    raw = re.sub(r"^pix de\s+", "", raw)
+    raw = re.sub(r"^transferencia recebida\s*", "", raw)
+    raw = re.sub(r"^transferencia rec(?:ebida)?\s*", "", raw)
+    raw = re.sub(r"\s+", " ", raw).strip()
+
+    alias_map = {
+        "bit corretora": "BIT",
+        "direct bh": "DIRECT",
+        "emerson victor": "EMERSON",
+        "fernando mont": "FERNANDO",
+        "future tecnologia": "FUTURE",
+        "nexabet receb": "NEXABET",
+        "nexus solucoes": "NEXUS",
+        "royal crest": "ROYAL",
+        "rvls compre": "RVLS",
+        "python tecnologia": "TYPHON",
+        "univebet gaming": "Univebet",
+        "phoenix gaming": "Phoenix Gaming",
+        "smart cluster": "Smart Cluster",
+        "r torres": "R Torres",
+        "x vit": "X Vit",
+    }
+    for source, target in alias_map.items():
+        if raw.startswith(source):
+            return f"Pix de {target}"
+
+    words = raw.split()
+    if not words:
+        return "Pix de Receita"
+
+    if len(words) >= 2:
+        pair = " ".join(words[:2])
+        keep_two_words = {"smart cluster", "r torres", "x vit", "phoenix gaming"}
+        if pair in keep_two_words:
+            label = " ".join(word.capitalize() if not word.isupper() else word for word in words[:2])
+            return f"Pix de {label}"
+
+    first = words[0]
+    label = first.upper() if len(first) <= 4 else first.capitalize()
+    return f"Pix de {label}"
