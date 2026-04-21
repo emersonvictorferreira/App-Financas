@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-import unicodedata
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -64,12 +63,14 @@ class GoogleSheetsService:
     def _write_expenses(self, service, month_name: str, transactions: list[Transaction]) -> int:
         sheet_name = _normalize_sheet_name(month_name)
         start_row = self._find_expense_start_row(service, sheet_name)
-        end_row = start_row + 160
-        target_range = f"{sheet_name}!L{start_row}:Q{end_row}"
-        values = self._get_range_values(service, target_range)
+        preview_end_row = start_row + 399
+        preview_range = f"{sheet_name}!L{start_row}:Q{preview_end_row}"
+        values = self._get_range_values(service, preview_range)
 
         existing_transactions = _existing_expense_transactions(values)
-        merged = _merge_expenses(existing_transactions + transactions)
+        merged = _merge_expenses(existing_transactions, transactions)
+        end_row = max(start_row + 160, start_row + len(merged) + 20)
+        target_range = f"{sheet_name}!L{start_row}:Q{end_row}"
         batch = merged[: end_row - start_row + 1]
 
         self._clear_values(service, target_range)
@@ -371,12 +372,19 @@ def _looks_like_date(value: str) -> bool:
         return False
 
 
-def _merge_expenses(transactions: list[Transaction]) -> list[Transaction]:
-    by_signature: dict[tuple[str, str, str], Transaction] = {}
-    for transaction in transactions:
+def _merge_expenses(existing_transactions: list[Transaction], imported_transactions: list[Transaction]) -> list[Transaction]:
+    existing_counts = Counter(_expense_signature(transaction.to_expense_row()) for transaction in existing_transactions)
+    imported_counts = Counter(_expense_signature(transaction.to_expense_row()) for transaction in imported_transactions)
+
+    exemplar: dict[tuple[str, str, str], Transaction] = {}
+    for transaction in existing_transactions + imported_transactions:
         signature = _expense_signature(transaction.to_expense_row())
-        by_signature.setdefault(signature, transaction)
-    return _sort_transactions(list(by_signature.values()))
+        exemplar.setdefault(signature, transaction)
+
+    merged: list[Transaction] = []
+    for signature, count in (existing_counts | imported_counts).items():
+        merged.extend([exemplar[signature]] * count)
+    return _sort_transactions(merged)
 
 
 def _aggregate_income_transactions(transactions: list[Transaction]) -> list[Transaction]:
@@ -457,58 +465,81 @@ def _parse_br_date(value: str) -> datetime:
 
 
 def _income_source_key(value: str) -> str:
-    normalized = _strip_accents(_normalized_text(value))
-    normalized = re.sub(r"^pix de\s+", "", normalized)
-    normalized = re.sub(r"^transferencia recebida\s*", "", normalized)
-    normalized = re.sub(r"^transferencia rec(?:ebida)?\s*", "", normalized)
-    normalized = re.sub(r"\b(recebida|recebido|pix|ted|doc)\b", " ", normalized)
-    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
-    return " ".join(normalized.split())
+    return _strip_accents(_normalized_text(_canonical_income_name(value)))
 
 
 def _strip_accents(value: str) -> str:
-    return "".join(char for char in unicodedata.normalize("NFKD", value) if not unicodedata.combining(char))
+    translation_table = str.maketrans(
+        "áàâãäéèêëíìîïóòôõöúùûüçÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇ",
+        "aaaaaeeeeiiiiooooouuuucAAAAAEEEEIIIIOOOOOUUUUC",
+    )
+    return value.translate(translation_table)
 
 
 def _canonical_income_description(value: str) -> str:
+    return f"Pix de {_canonical_income_name(value)}"
+
+
+def _canonical_income_name(value: str) -> str:
     raw = _strip_accents(_normalized_text(value))
     raw = re.sub(r"^pix de\s+", "", raw)
     raw = re.sub(r"^transferencia recebida\s*", "", raw)
     raw = re.sub(r"^transferencia rec(?:ebida)?\s*", "", raw)
-    raw = re.sub(r"\s+", " ", raw).strip()
+    raw = re.sub(r"\b(recebida|recebido|pix|ted|doc)\b", " ", raw)
+    raw = re.sub(r"[^a-z0-9]+", " ", raw)
+    raw = " ".join(raw.split())
 
     alias_map = {
         "bit corretora": "BIT",
         "direct bh": "DIRECT",
+        "direct": "DIRECT",
         "emerson victor": "EMERSON",
+        "emerson": "EMERSON",
         "fernando mont": "FERNANDO",
+        "fernando": "FERNANDO",
         "future tecnologia": "FUTURE",
-        "nexabet receb": "NEXABET",
+        "future": "FUTURE",
+        "nexabet recebi": "NEXABET",
+        "nexabet": "NEXABET",
+        "nexumpay": "NEXUMPAY",
         "nexus solucoes": "NEXUS",
+        "nexus": "NEXUS",
         "royal crest": "ROYAL",
+        "royal": "ROYAL",
         "rvls compre": "RVLS",
-        "python tecnologia": "TYPHON",
+        "rvls": "RVLS",
+        "soriginal": "SORIGINAL",
+        "python tecnologia": "Typhon",
+        "typhon": "Typhon",
         "univebet gaming": "Univebet",
-        "phoenix gaming": "Phoenix Gaming",
+        "univebet": "Univebet",
+        "phoenix gaming": "Phoenix",
+        "phoenix ga": "Phoenix",
+        "phoenix": "Phoenix",
         "smart cluster": "Smart Cluster",
         "r torres": "R Torres",
+        "r ": "R",
         "x vit": "X Vit",
+        "p d": "P",
+        "p ": "P",
+        "sandra vilela": "Sandra",
+        "sandra": "Sandra",
     }
     for source, target in alias_map.items():
-        if raw.startswith(source):
-            return f"Pix de {target}"
+        if raw == source or raw.startswith(f"{source} "):
+            return target
 
     words = raw.split()
     if not words:
-        return "Pix de Receita"
+        return "Receita"
 
     if len(words) >= 2:
         pair = " ".join(words[:2])
-        keep_two_words = {"smart cluster", "r torres", "x vit", "phoenix gaming"}
+        keep_two_words = {"smart cluster", "r torres", "x vit"}
         if pair in keep_two_words:
-            label = " ".join(word.capitalize() if not word.isupper() else word for word in words[:2])
-            return f"Pix de {label}"
+            return " ".join(word.capitalize() if len(word) > 3 else word.upper() for word in words[:2])
 
     first = words[0]
-    label = first.upper() if len(first) <= 4 else first.capitalize()
-    return f"Pix de {label}"
+    if len(first) <= 4:
+        return first.upper()
+    return first.capitalize()
