@@ -120,6 +120,7 @@ class GoogleSheetsService:
                 valueInputOption="USER_ENTERED",
                 body={"values": [transaction.to_income_row() for transaction in merged]},
             ).execute()
+            self._normalize_income_block_layout(service, sheet_name, start_row, start_row + len(merged) - 1)
 
         self._sync_income_total_formula(service, sheet_name, start_row, total_row)
 
@@ -224,14 +225,14 @@ class GoogleSheetsService:
                         "startRowIndex": template_row - 1,
                         "endRowIndex": template_row,
                         "startColumnIndex": 6,
-                        "endColumnIndex": 9,
+                        "endColumnIndex": 10,
                     },
                     "destination": {
                         "sheetId": sheet_id,
                         "startRowIndex": destination_row - 1,
                         "endRowIndex": destination_row - 1 + amount,
                         "startColumnIndex": 6,
-                        "endColumnIndex": 9,
+                        "endColumnIndex": 10,
                     },
                     "pasteType": "PASTE_FORMAT",
                     "pasteOrientation": "NORMAL",
@@ -302,6 +303,164 @@ class GoogleSheetsService:
                         },
                         "properties": {"pixelSize": pixel_size},
                         "fields": "pixelSize",
+                    }
+                }
+            )
+
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id,
+            body={"requests": requests},
+        ).execute()
+
+    def _normalize_income_block_layout(self, service, sheet_name: str, start_row: int, end_row: int) -> None:
+        if end_row < start_row:
+            return
+
+        sheet_id = self._get_sheet_id(service, sheet_name)
+        self._remerge_income_rows(service, sheet_id, start_row, end_row)
+        first_template_row = start_row
+        body_template_row = start_row + 1 if end_row > start_row else start_row
+
+        requests = [
+            {
+                "copyPaste": {
+                    "source": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": body_template_row - 1,
+                        "endRowIndex": body_template_row,
+                        "startColumnIndex": 6,
+                        "endColumnIndex": 10,
+                    },
+                    "destination": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": start_row - 1,
+                        "endRowIndex": end_row,
+                        "startColumnIndex": 6,
+                        "endColumnIndex": 10,
+                    },
+                    "pasteType": "PASTE_FORMAT",
+                    "pasteOrientation": "NORMAL",
+                }
+            },
+            {
+                "copyPaste": {
+                    "source": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": first_template_row - 1,
+                        "endRowIndex": first_template_row,
+                        "startColumnIndex": 6,
+                        "endColumnIndex": 10,
+                    },
+                    "destination": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": start_row - 1,
+                        "endRowIndex": start_row,
+                        "startColumnIndex": 6,
+                        "endColumnIndex": 10,
+                    },
+                    "pasteType": "PASTE_FORMAT",
+                    "pasteOrientation": "NORMAL",
+                }
+            },
+            {
+                "updateBorders": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": end_row - 1,
+                        "endRowIndex": end_row,
+                        "startColumnIndex": 6,
+                        "endColumnIndex": 10,
+                    },
+                    "bottom": {
+                        "style": "SOLID",
+                        "width": 1,
+                        "color": {},
+                    },
+                }
+            },
+            {
+                "repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": start_row - 1,
+                        "endRowIndex": end_row,
+                        "startColumnIndex": 8,
+                        "endColumnIndex": 10,
+                    },
+                    "cell": {
+                        "userEnteredFormat": {
+                            "horizontalAlignment": "CENTER",
+                            "verticalAlignment": "MIDDLE",
+                        }
+                    },
+                    "fields": "userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment",
+                }
+            },
+        ]
+
+        pixel_size = self._get_row_height(service, sheet_name, body_template_row)
+        if pixel_size is not None:
+            requests.append(
+                {
+                    "updateDimensionProperties": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "dimension": "ROWS",
+                            "startIndex": start_row - 1,
+                            "endIndex": end_row,
+                        },
+                        "properties": {"pixelSize": pixel_size},
+                        "fields": "pixelSize",
+                    }
+                }
+            )
+
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id,
+            body={"requests": requests},
+        ).execute()
+
+    def _remerge_income_rows(self, service, sheet_id: int, start_row: int, end_row: int) -> None:
+        requests = [
+            {
+                "unmergeCells": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": start_row - 1,
+                        "endRowIndex": end_row,
+                        "startColumnIndex": 6,
+                        "endColumnIndex": 10,
+                    }
+                }
+            }
+        ]
+
+        for row_number in range(start_row, end_row + 1):
+            requests.append(
+                {
+                    "mergeCells": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": row_number - 1,
+                            "endRowIndex": row_number,
+                            "startColumnIndex": 6,
+                            "endColumnIndex": 8,
+                        },
+                        "mergeType": "MERGE_ALL",
+                    }
+                }
+            )
+            requests.append(
+                {
+                    "mergeCells": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": row_number - 1,
+                            "endRowIndex": row_number,
+                            "startColumnIndex": 8,
+                            "endColumnIndex": 10,
+                        },
+                        "mergeType": "MERGE_ALL",
                     }
                 }
             )
@@ -451,7 +610,7 @@ class GoogleSheetsService:
 
 
 def _expense_signature(row: list[str | float]) -> tuple[str, str, str]:
-    description = _normalized_text(row[0] if len(row) > 0 else "")
+    description = _expense_description_key(row[0] if len(row) > 0 else "")
     amount = _normalized_amount(row[1] if len(row) > 1 else "")
     date = _normalized_text(row[2] if len(row) > 2 else "")
     return description, amount, date
@@ -538,17 +697,46 @@ def _looks_like_date(value: str) -> bool:
 
 
 def _merge_expenses(existing_transactions: list[Transaction], imported_transactions: list[Transaction]) -> list[Transaction]:
-    existing_counts = Counter(_expense_signature(transaction.to_expense_row()) for transaction in existing_transactions)
-    imported_counts = Counter(_expense_signature(transaction.to_expense_row()) for transaction in imported_transactions)
+    grouped_existing: dict[tuple[str, str, str], list[tuple[Transaction, str]]] = defaultdict(list)
+    grouped_imported: dict[tuple[str, str, str], list[tuple[Transaction, str]]] = defaultdict(list)
 
-    exemplar: dict[tuple[str, str, str], Transaction] = {}
-    for transaction in existing_transactions + imported_transactions:
-        signature = _expense_signature(transaction.to_expense_row())
-        exemplar.setdefault(signature, transaction)
+    for transaction in existing_transactions:
+        normalized_transaction = Transaction(
+            description=_canonical_expense_description(transaction.description),
+            amount=transaction.amount,
+            date=transaction.date,
+            category=transaction.category,
+            payment_method=transaction.payment_method,
+            essential=transaction.essential,
+            kind=transaction.kind,
+        )
+        signature = _expense_signature(normalized_transaction.to_expense_row())
+        grouped_existing[signature].append((normalized_transaction, _normalized_text(transaction.description)))
+
+    for transaction in imported_transactions:
+        normalized_transaction = Transaction(
+            description=_canonical_expense_description(transaction.description),
+            amount=transaction.amount,
+            date=transaction.date,
+            category=transaction.category,
+            payment_method=transaction.payment_method,
+            essential=transaction.essential,
+            kind=transaction.kind,
+        )
+        signature = _expense_signature(normalized_transaction.to_expense_row())
+        grouped_imported[signature].append((normalized_transaction, _normalized_text(transaction.description)))
 
     merged: list[Transaction] = []
-    for signature, count in (existing_counts | imported_counts).items():
-        merged.extend([exemplar[signature]] * count)
+    for signature in grouped_existing.keys() | grouped_imported.keys():
+        entries = grouped_existing.get(signature, []) + grouped_imported.get(signature, [])
+        exemplar = max((transaction for transaction, _raw in entries), key=lambda transaction: _expense_description_priority(transaction.description))
+        imported_counts = Counter(raw_description for _transaction, raw_description in grouped_imported.get(signature, []))
+        existing_counts = Counter(raw_description for _transaction, raw_description in grouped_existing.get(signature, []))
+        if imported_counts:
+            count = max(imported_counts.values())
+        else:
+            count = min(max(existing_counts.values(), default=0), 1)
+        merged.extend([exemplar] * count)
     return _sort_transactions(merged)
 
 
@@ -631,6 +819,44 @@ def _parse_br_date(value: str) -> datetime:
 
 def _income_source_key(value: str) -> str:
     return _strip_accents(_normalized_text(_canonical_income_name(value)))
+
+
+def _expense_description_key(value: str) -> str:
+    return _strip_accents(_normalized_text(_canonical_expense_description(str(value or ""))))
+
+
+def _canonical_expense_description(value: str) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    lowered = _strip_accents(_normalized_text(text))
+
+    replacements = {
+        "pix para game hubstore": "Pix para GAME HUBSTORE",
+        "pix para game": "Pix para GAME HUBSTORE",
+        "pix para shpp brasil": "Pix para SHPP BRASIL",
+        "pix para shpp": "Pix para SHPP BRASIL",
+        "pix para ng celulares": "Pix para NG CELULARES",
+        "pix para ng": "Pix para NG CELULARES",
+        "pix para lucieda marques": "Pix para LUCIEDA MARQUES",
+        "pix para lucieda": "Pix para LUCIEDA MARQUES",
+        "pix para ryan oliveira": "Pix para Ryan Oliveira",
+        "pix para ryan oli": "Pix para Ryan Oliveira",
+        "pix para edson roberto": "Pix para Edson Roberto",
+        "pix para edson ro": "Pix para Edson Roberto",
+        "pix para jose guilherme": "Pix para Jose Guilherme",
+        "pix para jose gui": "Pix para Jose Guilherme",
+        "pix para pix marketplace": "Pix para PIX Marketplace",
+        "pix para mercado pago": "Pix para Mercado Pago",
+    }
+    for source, target in replacements.items():
+        if lowered == source or lowered.startswith(f"{source} "):
+            return target
+
+    return text
+
+
+def _expense_description_priority(value: str) -> tuple[int, int]:
+    text = str(value or "")
+    return (0 if "..." in text else 1, len(text))
 
 
 def _strip_accents(value: str) -> str:
