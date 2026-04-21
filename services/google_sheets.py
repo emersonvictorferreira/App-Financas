@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -55,52 +57,45 @@ class GoogleSheetsService:
         total_rows = 0
         service = self._build_service()
         for month_name, grouped in by_month.items():
-            total_rows += self._write_expenses(service, month_name, grouped["expense"])
-            total_rows += self._write_incomes(service, month_name, grouped["income"])
+            total_rows += self._write_expenses(service, month_name, _sort_transactions(grouped["expense"]))
+            total_rows += self._write_incomes(service, month_name, _sort_transactions(grouped["income"]))
         return total_rows
 
     def _write_expenses(self, service, month_name: str, transactions: list[Transaction]) -> int:
-        if not transactions:
-            return 0
-
         sheet_name = _normalize_sheet_name(month_name)
         start_row = self._find_expense_start_row(service, sheet_name)
         end_row = start_row + 160
-        values = self._get_range_values(service, f"{sheet_name}!L{start_row}:Q{end_row}")
+        target_range = f"{sheet_name}!L{start_row}:Q{end_row}"
+        values = self._get_range_values(service, target_range)
 
-        existing_signatures = {_expense_signature(row) for row in values if _is_expense_row(row)}
-        pending = [transaction for transaction in transactions if _expense_signature(transaction.to_expense_row()) not in existing_signatures]
-        if not pending:
-            return 0
+        existing_transactions = _existing_expense_transactions(values)
+        merged = _merge_expenses(existing_transactions + transactions)
+        batch = merged[: end_row - start_row + 1]
 
-        next_row = _find_next_empty_row(values, start_row)
-        batch = pending[: max(0, end_row - next_row + 1)]
-        if not batch:
-            return 0
+        self._clear_values(service, target_range)
+        if batch:
+            service.spreadsheets().values().update(
+                spreadsheetId=self.spreadsheet_id,
+                range=f"{sheet_name}!L{start_row}:Q{start_row + len(batch) - 1}",
+                valueInputOption="USER_ENTERED",
+                body={"values": [transaction.to_expense_row() for transaction in batch]},
+            ).execute()
 
-        service.spreadsheets().values().update(
-            spreadsheetId=self.spreadsheet_id,
-            range=f"{sheet_name}!L{next_row}:Q{next_row + len(batch) - 1}",
-            valueInputOption="USER_ENTERED",
-            body={"values": [transaction.to_expense_row() for transaction in batch]},
-        ).execute()
-        return len(batch)
+        previous_signatures = {_expense_signature(transaction.to_expense_row()) for transaction in existing_transactions}
+        current_signatures = {_expense_signature(transaction.to_expense_row()) for transaction in batch}
+        return len(current_signatures - previous_signatures)
 
     def _write_incomes(self, service, month_name: str, transactions: list[Transaction]) -> int:
-        if not transactions:
-            return 0
-
         sheet_name = _normalize_sheet_name(month_name)
-        grouped = _group_income_sources(transactions)
         start_row = 4
         total_row = self._find_income_total_row(service, sheet_name)
         end_row = total_row - 1
 
         values = self._get_range_values(service, f"{sheet_name}!G{start_row}:I{end_row}")
-        existing = _existing_income_rows(values, start_row)
+        existing_transactions = _existing_income_transactions(values)
+        merged = _merge_income_sources(existing_transactions + transactions)
 
-        new_transactions = [transaction for transaction in grouped if _normalized_text(transaction.description) not in existing]
-        required_rows = len(existing) + len(new_transactions)
+        required_rows = len(merged)
         available_rows = max(0, end_row - start_row + 1)
         if required_rows > available_rows:
             rows_to_insert = required_rows - available_rows
@@ -108,35 +103,25 @@ class GoogleSheetsService:
             self._copy_income_row_layout(service, sheet_name, end_row, total_row, rows_to_insert)
             total_row += rows_to_insert
             end_row = total_row - 1
-            values = self._get_range_values(service, f"{sheet_name}!G{start_row}:I{end_row}")
-            existing = _existing_income_rows(values, start_row)
 
-        changed = 0
-        for transaction in grouped:
-            row_info = existing.get(_normalized_text(transaction.description))
-            if row_info is not None:
-                row_number, existing_amount = row_info
-                if transaction.amount > existing_amount:
-                    service.spreadsheets().values().update(
-                        spreadsheetId=self.spreadsheet_id,
-                        range=f"{sheet_name}!G{row_number}:I{row_number}",
-                        valueInputOption="USER_ENTERED",
-                        body={"values": [transaction.to_income_row()]},
-                    ).execute()
-                    changed += 1
-
-        next_row = _find_next_empty_row(values, start_row)
-        batch = new_transactions[: max(0, end_row - next_row + 1)]
-        if batch:
+        target_range = f"{sheet_name}!G{start_row}:I{end_row}"
+        self._clear_values(service, target_range)
+        if merged:
             service.spreadsheets().values().update(
                 spreadsheetId=self.spreadsheet_id,
-                range=f"{sheet_name}!G{next_row}:I{next_row + len(batch) - 1}",
+                range=f"{sheet_name}!G{start_row}:I{start_row + len(merged) - 1}",
                 valueInputOption="USER_ENTERED",
-                body={"values": [transaction.to_income_row() for transaction in batch]},
+                body={"values": [transaction.to_income_row() for transaction in merged]},
             ).execute()
-            changed += len(batch)
 
         self._sync_income_total_formula(service, sheet_name, start_row, total_row)
+
+        previous_keys = {_income_source_key(transaction.description): transaction.amount for transaction in existing_transactions}
+        current_keys = {_income_source_key(transaction.description): transaction.amount for transaction in merged}
+        changed = 0
+        for key, amount in current_keys.items():
+            if key not in previous_keys or amount > previous_keys[key]:
+                changed += 1
         return changed
 
     def _get_range_values(self, service, target_range: str) -> list[list[str]]:
@@ -145,6 +130,13 @@ class GoogleSheetsService:
             range=target_range,
         ).execute()
         return response.get("values", [])
+
+    def _clear_values(self, service, target_range: str) -> None:
+        service.spreadsheets().values().clear(
+            spreadsheetId=self.spreadsheet_id,
+            range=target_range,
+            body={},
+        ).execute()
 
     def _find_income_total_row(self, service, sheet_name: str) -> int:
         values = self._get_range_values(service, f"{sheet_name}!G4:G200")
@@ -160,7 +152,7 @@ class GoogleSheetsService:
         values = self._get_range_values(service, f"{sheet_name}!L1:Q250")
         row_number = 1
         expected_header = [
-            "descrição",
+            "descricao",
             "valor",
             "data",
             "categoria",
@@ -168,7 +160,7 @@ class GoogleSheetsService:
             "essencial?",
         ]
         for row in values:
-            normalized = [_normalized_text(value) for value in row[:6]]
+            normalized = [_strip_accents(_normalized_text(value)) for value in row[:6]]
             if normalized == expected_header:
                 return row_number + 1
             row_number += 1
@@ -291,16 +283,6 @@ class GoogleSheetsService:
         return build("sheets", "v4", credentials=credentials)
 
 
-def _find_next_empty_row(values: list[list[str]], start_row: int) -> int:
-    row = start_row
-    for row_values in values:
-        first_value = row_values[0] if row_values else ""
-        if not str(first_value).strip():
-            return row
-        row += 1
-    return row
-
-
 def _expense_signature(row: list[str | float]) -> tuple[str, str, str]:
     description = _normalized_text(row[0] if len(row) > 0 else "")
     amount = _normalized_amount(row[1] if len(row) > 1 else "")
@@ -322,17 +304,43 @@ def _is_expense_row(row: list[str | float]) -> bool:
     return True
 
 
-def _existing_income_rows(values: list[list[str]], start_row: int) -> dict[str, tuple[int, float]]:
-    rows: dict[str, tuple[int, float]] = {}
-    row_number = start_row
+def _existing_expense_transactions(values: list[list[str]]) -> list[Transaction]:
+    transactions: list[Transaction] = []
     for row in values:
-        if row:
-            description = _normalized_text(row[0] if len(row) > 0 else "")
-            if description:
-                amount = _as_float(row[2] if len(row) > 2 else 0)
-                rows[description] = (row_number, amount)
-        row_number += 1
-    return rows
+        if not _is_expense_row(row):
+            continue
+        transactions.append(
+            Transaction(
+                description=str(row[0]).strip(),
+                amount=_as_float(row[1]),
+                date=str(row[2]).replace("'", "").strip(),
+                category=str(row[3]).strip() if len(row) > 3 else "Outros",
+                payment_method=str(row[4]).strip() if len(row) > 4 else "Dinheiro / Pix",
+                essential=str(row[5]).strip() if len(row) > 5 else "SIM",
+                kind="expense",
+            )
+        )
+    return transactions
+
+
+def _existing_income_transactions(values: list[list[str]]) -> list[Transaction]:
+    transactions: list[Transaction] = []
+    for row in values:
+        if not row:
+            continue
+        description = str(row[0]).strip() if len(row) > 0 else ""
+        if not description:
+            continue
+        amount = _as_float(row[2] if len(row) > 2 else 0)
+        transactions.append(
+            Transaction(
+                description=description,
+                amount=amount,
+                date="01/01/1900",
+                kind="income",
+            )
+        )
+    return transactions
 
 
 def _normalized_text(value) -> str:
@@ -362,29 +370,49 @@ def _looks_like_date(value: str) -> bool:
         return False
 
 
-def _group_income_sources(transactions: list[Transaction]) -> list[Transaction]:
-    grouped: dict[str, float] = defaultdict(float)
-    exemplar: dict[str, Transaction] = {}
+def _merge_expenses(transactions: list[Transaction]) -> list[Transaction]:
+    by_signature: dict[tuple[str, str, str], Transaction] = {}
     for transaction in transactions:
-        key = transaction.description
-        grouped[key] += transaction.amount
-        exemplar.setdefault(key, transaction)
+        signature = _expense_signature(transaction.to_expense_row())
+        by_signature.setdefault(signature, transaction)
+    return _sort_transactions(list(by_signature.values()))
 
-    result: list[Transaction] = []
-    for description, amount in grouped.items():
-        source = exemplar[description]
-        result.append(
-            Transaction(
-                description=description,
-                amount=round(amount, 2),
-                date=source.date,
-                category=source.category,
-                payment_method=source.payment_method,
-                essential=source.essential,
-                kind="income",
-            )
+
+def _merge_income_sources(transactions: list[Transaction]) -> list[Transaction]:
+    grouped: dict[str, Transaction] = {}
+    for transaction in transactions:
+        key = _income_source_key(transaction.description)
+        current = grouped.get(key)
+        if current is None:
+            grouped[key] = transaction
+            continue
+
+        best_description = _prefer_income_description(current.description, transaction.description)
+        best_amount = max(current.amount, transaction.amount)
+        grouped[key] = Transaction(
+            description=best_description,
+            amount=round(best_amount, 2),
+            date=current.date,
+            category=current.category,
+            payment_method=current.payment_method,
+            essential=current.essential,
+            kind="income",
         )
-    return result
+
+    return sorted(grouped.values(), key=lambda transaction: _normalized_text(transaction.description))
+
+
+def _prefer_income_description(current: str, candidate: str) -> str:
+    current_clean = _display_score(current)
+    candidate_clean = _display_score(candidate)
+    return candidate if candidate_clean > current_clean else current
+
+
+def _display_score(value: str) -> tuple[int, int]:
+    cleaned = _normalized_text(value)
+    has_ellipsis = int("..." not in cleaned)
+    token_count = len(cleaned.split())
+    return has_ellipsis, token_count
 
 
 def _month_name_from_date(date_str: str) -> str:
@@ -394,5 +422,30 @@ def _month_name_from_date(date_str: str) -> str:
 
 def _normalize_sheet_name(month_name: str) -> str:
     if month_name == "MARCO":
-        return "MARÇO"
+        return "MAR\u00c7O"
     return month_name
+
+
+def _sort_transactions(transactions: list[Transaction]) -> list[Transaction]:
+    return sorted(
+        transactions,
+        key=lambda transaction: (_parse_br_date(transaction.date), _normalized_text(transaction.description), transaction.amount),
+    )
+
+
+def _parse_br_date(value: str) -> datetime:
+    return datetime.strptime(value, "%d/%m/%Y")
+
+
+def _income_source_key(value: str) -> str:
+    normalized = _strip_accents(_normalized_text(value))
+    normalized = re.sub(r"^pix de\s+", "", normalized)
+    normalized = re.sub(r"^transferencia recebida\s*", "", normalized)
+    normalized = re.sub(r"^transferencia rec(?:ebida)?\s*", "", normalized)
+    normalized = re.sub(r"\b(recebida|recebido|pix|ted|doc)\b", " ", normalized)
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+    return " ".join(normalized.split())
+
+
+def _strip_accents(value: str) -> str:
+    return "".join(char for char in unicodedata.normalize("NFKD", value) if not unicodedata.combining(char))
