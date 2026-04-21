@@ -64,10 +64,11 @@ class GoogleSheetsService:
             return 0
 
         sheet_name = _normalize_sheet_name(month_name)
-        start_row, end_row = 22, 92
+        start_row = self._find_expense_start_row(service, sheet_name)
+        end_row = start_row + 160
         values = self._get_range_values(service, f"{sheet_name}!L{start_row}:Q{end_row}")
 
-        existing_signatures = {_expense_signature(row) for row in values if row}
+        existing_signatures = {_expense_signature(row) for row in values if _is_expense_row(row)}
         pending = [transaction for transaction in transactions if _expense_signature(transaction.to_expense_row()) not in existing_signatures]
         if not pending:
             return 0
@@ -154,6 +155,24 @@ class GoogleSheetsService:
                 return row_number
             row_number += 1
         raise ValueError(f"Nao foi possivel localizar a linha TOTAL na aba {sheet_name}.")
+
+    def _find_expense_start_row(self, service, sheet_name: str) -> int:
+        values = self._get_range_values(service, f"{sheet_name}!L1:Q250")
+        row_number = 1
+        expected_header = [
+            "descrição",
+            "valor",
+            "data",
+            "categoria",
+            "forma de pagamento",
+            "essencial?",
+        ]
+        for row in values:
+            normalized = [_normalized_text(value) for value in row[:6]]
+            if normalized == expected_header:
+                return row_number + 1
+            row_number += 1
+        raise ValueError(f"Nao foi possivel localizar o cabecalho de gastos na aba {sheet_name}.")
 
     def _insert_rows_before(self, service, sheet_name: str, row_number: int, amount: int) -> None:
         if amount <= 0:
@@ -289,6 +308,20 @@ def _expense_signature(row: list[str | float]) -> tuple[str, str, str]:
     return description, amount, date
 
 
+def _is_expense_row(row: list[str | float]) -> bool:
+    if len(row) < 3:
+        return False
+    description = _normalized_text(row[0])
+    date = str(row[2] or "").strip()
+    if not description or not _looks_like_date(date):
+        return False
+    try:
+        _as_float(row[1])
+    except ValueError:
+        return False
+    return True
+
+
 def _existing_income_rows(values: list[list[str]], start_row: int) -> dict[str, tuple[int, float]]:
     rows: dict[str, tuple[int, float]] = {}
     row_number = start_row
@@ -319,6 +352,14 @@ def _as_float(value) -> float:
         return 0.0
     text = text.replace("R$", "").replace(".", "").replace(",", ".").strip()
     return round(float(text), 2)
+
+
+def _looks_like_date(value: str) -> bool:
+    try:
+        datetime.strptime(value.replace("'", ""), "%d/%m/%Y")
+        return True
+    except ValueError:
+        return False
 
 
 def _group_income_sources(transactions: list[Transaction]) -> list[Transaction]:

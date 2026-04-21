@@ -25,6 +25,7 @@ MONTH_MAP = {
 
 DATE_HEADER_PATTERN = re.compile(r"^(?P<day>\d{2})\s+(?P<month>[A-Z]{3})\s+(?P<year>\d{4})(?P<rest>.*)$")
 AMOUNT_ONLY_PATTERN = re.compile(r"^\d[\d\.,]*$")
+INLINE_AMOUNT_PATTERN = re.compile(r"^(?P<description>.+?)\s+(?P<amount>\d[\d\.,]*)$")
 
 IGNORED_PREFIXES = (
     "Emerson ",
@@ -149,7 +150,7 @@ def _parse_nubank_statement(lines: list[str]) -> list[Transaction]:
                 amount=amount,
                 date=current_date,
                 category=_detect_category(description),
-                payment_method="\U0001F4B8 Dinheiro / Pix" if "pix" in description.lower() else "\U0001F4B2 Boleto",
+                payment_method=_detect_payment_method(description),
                 essential="\u2714\ufe0f",
                 kind=kind,
             )
@@ -192,6 +193,12 @@ def _parse_nubank_statement(lines: list[str]) -> list[Transaction]:
             flush_transaction(line)
             continue
 
+        inline_amount_match = INLINE_AMOUNT_PATTERN.match(line)
+        if inline_amount_match and _is_inline_transaction_description(inline_amount_match.group("description")):
+            description_parts = [inline_amount_match.group("description")]
+            flush_transaction(inline_amount_match.group("amount"))
+            continue
+
         if current_date is None:
             continue
 
@@ -225,6 +232,11 @@ def _is_account_number_fragment(line: str, description_parts: list[str], next_li
 
 def _compact_description(description: str, kind: str) -> str:
     cleaned = re.sub(r"\s+", " ", description).strip()
+    debit_match = re.search(r"Compra no d[eé]bito(?: via [^ ]+)? (.+)", cleaned, re.IGNORECASE)
+    if debit_match:
+        merchant = _shorten_name(debit_match.group(1).strip())
+        return _limit_text(f"Debito {merchant}", 20)
+
     pix_match = re.search(r"Transferência (?:enviada|recebida) pelo Pix (.+)", cleaned, re.IGNORECASE)
     if pix_match:
         tail = pix_match.group(1)
@@ -289,6 +301,8 @@ def _parse_currency(value: str) -> float:
 
 def _detect_category(description: str) -> str:
     lowered = description.lower()
+    if "restaurante" in lowered or "spotify" in lowered:
+        return "\U0001F37D\ufe0f Alimentacao"
     if "claro" in lowered or "mercado pago" in lowered:
         return "\u26a1 Servicos domesticos"
     if "mercado" in lowered:
@@ -296,3 +310,17 @@ def _detect_category(description: str) -> str:
     if "phoenix" in lowered or "soriginal" in lowered:
         return "\U0001F389 Lazer"
     return "\U0001F9FE Outros"
+
+
+def _detect_payment_method(description: str) -> str:
+    lowered = description.lower()
+    if "compra no débito" in lowered or "compra no debito" in lowered:
+        return "\U0001F4B3 Débito"
+    if "pix" in lowered:
+        return "\U0001F4B8 Dinheiro / Pix"
+    return "\U0001F4B2 Boleto"
+
+
+def _is_inline_transaction_description(text: str) -> bool:
+    lowered = text.lower()
+    return lowered.startswith("compra no débito") or lowered.startswith("compra no debito")
