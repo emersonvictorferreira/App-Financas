@@ -93,7 +93,8 @@ class GoogleSheetsService:
 
         values = self._get_range_values(service, f"{sheet_name}!G{start_row}:I{end_row}")
         existing_transactions = _existing_income_transactions(values)
-        merged = _merge_income_sources(existing_transactions + transactions)
+        imported_transactions = _aggregate_income_transactions(transactions)
+        merged = _merge_income_sources(existing_transactions, imported_transactions)
 
         required_rows = len(merged)
         available_rows = max(0, end_row - start_row + 1)
@@ -378,12 +379,12 @@ def _merge_expenses(transactions: list[Transaction]) -> list[Transaction]:
     return _sort_transactions(list(by_signature.values()))
 
 
-def _merge_income_sources(transactions: list[Transaction]) -> list[Transaction]:
+def _aggregate_income_transactions(transactions: list[Transaction]) -> list[Transaction]:
     grouped: dict[str, Transaction] = {}
     for transaction in transactions:
         key = _income_source_key(transaction.description)
-        current = grouped.get(key)
         canonical_description = _canonical_income_description(transaction.description)
+        current = grouped.get(key)
         if current is None:
             grouped[key] = Transaction(
                 description=canonical_description,
@@ -396,16 +397,39 @@ def _merge_income_sources(transactions: list[Transaction]) -> list[Transaction]:
             )
             continue
 
-        best_amount = max(current.amount, transaction.amount)
         grouped[key] = Transaction(
             description=current.description,
-            amount=round(best_amount, 2),
-            date=current.date,
+            amount=round(current.amount + transaction.amount, 2),
+            date=min(current.date, transaction.date, key=_parse_br_date),
             category=current.category,
             payment_method=current.payment_method,
             essential=current.essential,
             kind="income",
         )
+
+    return sorted(grouped.values(), key=lambda transaction: _normalized_text(transaction.description))
+
+
+def _merge_income_sources(existing_transactions: list[Transaction], imported_transactions: list[Transaction]) -> list[Transaction]:
+    grouped: dict[str, Transaction] = {}
+
+    for transaction in existing_transactions:
+        key = _income_source_key(transaction.description)
+        grouped[key] = Transaction(
+            description=_canonical_income_description(transaction.description),
+            amount=transaction.amount,
+            date=transaction.date,
+            category=transaction.category,
+            payment_method=transaction.payment_method,
+            essential=transaction.essential,
+            kind="income",
+        )
+
+    for transaction in imported_transactions:
+        key = _income_source_key(transaction.description)
+        current = grouped.get(key)
+        if current is None or transaction.amount >= current.amount:
+            grouped[key] = transaction
 
     return sorted(grouped.values(), key=lambda transaction: _normalized_text(transaction.description))
 
