@@ -658,11 +658,12 @@ def _existing_income_transactions(values: list[list[str]]) -> list[Transaction]:
         if not description:
             continue
         amount = _as_float(row[2] if len(row) > 2 else 0)
+        embedded_date = _extract_income_display_date(description)
         transactions.append(
             Transaction(
                 description=description,
                 amount=amount,
-                date="01/01/1900",
+                date=embedded_date or "01/01/1900",
                 kind="income",
             )
         )
@@ -741,10 +742,11 @@ def _merge_expenses(existing_transactions: list[Transaction], imported_transacti
 
 
 def _aggregate_income_transactions(transactions: list[Transaction]) -> list[Transaction]:
-    grouped: dict[str, Transaction] = {}
+    grouped: dict[tuple[str, str], Transaction] = {}
     for transaction in transactions:
-        key = _income_source_key(transaction.description)
-        canonical_description = _canonical_income_description(transaction.description)
+        source_key = _income_source_key(transaction.description)
+        key = (source_key, transaction.date)
+        canonical_description = _income_display_description(transaction.description, transaction.date)
         current = grouped.get(key)
         if current is None:
             grouped[key] = Transaction(
@@ -761,7 +763,7 @@ def _aggregate_income_transactions(transactions: list[Transaction]) -> list[Tran
         grouped[key] = Transaction(
             description=current.description,
             amount=round(current.amount + transaction.amount, 2),
-            date=min(current.date, transaction.date, key=_parse_br_date),
+            date=current.date,
             category=current.category,
             payment_method=current.payment_method,
             essential=current.essential,
@@ -772,12 +774,12 @@ def _aggregate_income_transactions(transactions: list[Transaction]) -> list[Tran
 
 
 def _merge_income_sources(existing_transactions: list[Transaction], imported_transactions: list[Transaction]) -> list[Transaction]:
-    grouped: dict[str, Transaction] = {}
+    grouped: dict[tuple[str, str], Transaction] = {}
 
     for transaction in existing_transactions:
-        key = _income_source_key(transaction.description)
+        key = _income_merge_key(transaction)
         grouped[key] = Transaction(
-            description=_canonical_income_description(transaction.description),
+            description=_normalize_existing_income_description(transaction),
             amount=transaction.amount,
             date=transaction.date,
             category=transaction.category,
@@ -787,12 +789,12 @@ def _merge_income_sources(existing_transactions: list[Transaction], imported_tra
         )
 
     for transaction in imported_transactions:
-        key = _income_source_key(transaction.description)
+        key = _income_merge_key(transaction)
         current = grouped.get(key)
         if current is None or transaction.amount >= current.amount:
             grouped[key] = transaction
 
-    return sorted(grouped.values(), key=lambda transaction: _normalized_text(transaction.description))
+    return sorted(grouped.values(), key=lambda transaction: (_parse_br_date(transaction.date), _normalized_text(transaction.description)))
 
 
 def _month_name_from_date(date_str: str) -> str:
@@ -871,8 +873,63 @@ def _canonical_income_description(value: str) -> str:
     return f"Pix de {_canonical_income_name(value)}"
 
 
+def _income_display_description(value: str, date: str) -> str:
+    base = _canonical_income_description(value)
+    return _limit_income_text(f"{base} ({_display_income_date(date)})", 24)
+
+
+def _normalize_existing_income_description(transaction: Transaction) -> str:
+    embedded_date = _extract_income_display_date(transaction.description)
+    if embedded_date:
+        return _limit_income_text(transaction.description.strip(), 24)
+    if transaction.date and transaction.date != "01/01/1900":
+        return _income_display_description(transaction.description, transaction.date)
+    return _limit_income_text(_canonical_income_description(transaction.description), 24)
+
+
+def _income_merge_key(transaction: Transaction) -> tuple[str, str]:
+    extracted = _extract_income_display_date(transaction.description)
+    if extracted:
+        date_key = extracted
+    elif transaction.date and transaction.date != "01/01/1900":
+        date_key = _display_income_date(transaction.date)
+    else:
+        date_key = "sem-data"
+    return _income_source_key(transaction.description), date_key
+
+
+def _extract_income_display_date(description: str) -> str | None:
+    match = re.search(r"\((\d{2})/(\d{2})\)\s*$", str(description or "").strip())
+    if not match:
+        return None
+    day, month = match.groups()
+    return f"{day}/{month}"
+
+
+def _display_income_date(date: str) -> str:
+    parsed = _parse_br_date(date)
+    return parsed.strftime("%d/%m")
+
+
+def _limit_income_text(text: str, max_len: int) -> str:
+    if len(text) <= max_len:
+        return text
+
+    suffix_match = re.search(r"\s\(\d{2}/\d{2}\)\s*$", text)
+    if not suffix_match:
+        return _limit_text(text, max_len)
+
+    suffix = suffix_match.group(0)
+    base = text[: -len(suffix)].rstrip()
+    available = max_len - len(suffix)
+    if available <= 3:
+        return _limit_text(text, max_len)
+    return base[: available - 3].rstrip() + "..." + suffix
+
+
 def _canonical_income_name(value: str) -> str:
     raw = _strip_accents(_normalized_text(value))
+    raw = re.sub(r"\(\d{2}/\d{2}\)\s*$", "", raw)
     raw = re.sub(r"^pix de\s+", "", raw)
     raw = re.sub(r"^transferencia recebida\s*", "", raw)
     raw = re.sub(r"^transferencia rec(?:ebida)?\s*", "", raw)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import Mock
 
-from services.google_sheets import GoogleSheetsService
+from services.google_sheets import GoogleSheetsService, _aggregate_income_transactions, _merge_income_sources
 from services.pdf_parser import Transaction
 
 
@@ -54,6 +54,34 @@ class GoogleSheetsServiceTests(unittest.TestCase):
         inserted = self.service._write_expenses(self.api, "ABRIL", [duplicate])
 
         self.assertEqual(inserted, 0)
+
+    def test_aggregate_income_transactions_keeps_same_source_in_different_dates_separate(self):
+        imported = [
+            Transaction(description="Pix de SORIGINAL", amount=100.0, date="05/05/2026", kind="income"),
+            Transaction(description="Pix de SORIGINAL", amount=150.0, date="20/05/2026", kind="income"),
+        ]
+
+        aggregated = _aggregate_income_transactions(imported)
+
+        self.assertEqual(len(aggregated), 2)
+        self.assertEqual(aggregated[0].description, "Pix de SORIGINAL (05/05)")
+        self.assertEqual(aggregated[0].amount, 100.0)
+        self.assertEqual(aggregated[1].description, "Pix de SORIGINAL (20/05)")
+        self.assertEqual(aggregated[1].amount, 150.0)
+
+    def test_merge_income_sources_matches_existing_row_with_embedded_date(self):
+        existing = [
+            Transaction(description="Pix de SORIGIN... (05/05)", amount=100.0, date="01/01/1900", kind="income"),
+        ]
+        imported = [
+            Transaction(description="Pix de SORIGIN... (05/05)", amount=100.0, date="05/05/2026", kind="income"),
+            Transaction(description="Pix de SORIGIN... (20/05)", amount=150.0, date="20/05/2026", kind="income"),
+        ]
+
+        merged = _merge_income_sources(existing, imported)
+
+        self.assertEqual(len(merged), 2)
+        self.assertEqual([row.description for row in merged], ["Pix de SORIGIN... (05/05)", "Pix de SORIGIN... (20/05)"])
 
 
 if __name__ == "__main__":
