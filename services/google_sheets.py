@@ -875,7 +875,7 @@ def _canonical_income_description(value: str) -> str:
 
 def _income_display_description(value: str, date: str) -> str:
     base = _canonical_income_description(value)
-    return _limit_income_text(f"{base} ({_display_income_date(date)})", 24)
+    return _limit_income_text(f"{base} - {_display_income_date(date)}", 24)
 
 
 def _normalize_existing_income_description(transaction: Transaction) -> str:
@@ -899,10 +899,11 @@ def _income_merge_key(transaction: Transaction) -> tuple[str, str]:
 
 
 def _extract_income_display_date(description: str) -> str | None:
-    match = re.search(r"\((\d{2})/(\d{2})\)\s*$", str(description or "").strip())
+    match = re.search(r"(?:\((\d{2})/(\d{2})\)|-\s*(\d{2})/(\d{2}))\s*$", str(description or "").strip())
     if not match:
         return None
-    day, month = match.groups()
+    day = match.group(1) or match.group(3)
+    month = match.group(2) or match.group(4)
     return f"{day}/{month}"
 
 
@@ -915,7 +916,7 @@ def _limit_income_text(text: str, max_len: int) -> str:
     if len(text) <= max_len:
         return text
 
-    suffix_match = re.search(r"\s\(\d{2}/\d{2}\)\s*$", text)
+    suffix_match = re.search(r"\s(?:\(\d{2}/\d{2}\)|-\s\d{2}/\d{2})\s*$", text)
     if not suffix_match:
         return _limit_text(text, max_len)
 
@@ -929,7 +930,7 @@ def _limit_income_text(text: str, max_len: int) -> str:
 
 def _canonical_income_name(value: str) -> str:
     raw = _strip_accents(_normalized_text(value))
-    raw = re.sub(r"\(\d{2}/\d{2}\)\s*$", "", raw)
+    raw = re.sub(r"(?:\(\d{2}/\d{2}\)|-\s*\d{2}/\d{2})\s*$", "", raw)
     raw = re.sub(r"^pix de\s+", "", raw)
     raw = re.sub(r"^transferencia recebida\s*", "", raw)
     raw = re.sub(r"^transferencia rec(?:ebida)?\s*", "", raw)
