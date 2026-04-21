@@ -70,6 +70,10 @@ class GoogleSheetsService:
         existing_transactions = _existing_expense_transactions(values)
         merged = _merge_expenses(existing_transactions, transactions)
         end_row = max(start_row + 160, start_row + len(merged) + 20)
+        row_count = self._get_sheet_row_count(service, sheet_name)
+        required_extra_rows = end_row - row_count
+        if required_extra_rows > 0:
+            self._insert_rows_before(service, sheet_name, row_count + 1, required_extra_rows)
         target_range = f"{sheet_name}!L{start_row}:Q{end_row}"
         batch = merged[: end_row - start_row + 1]
 
@@ -168,6 +172,19 @@ class GoogleSheetsService:
             row_number += 1
         raise ValueError(f"Nao foi possivel localizar o cabecalho de gastos na aba {sheet_name}.")
 
+    def _find_expense_end_row(self, service, sheet_name: str, start_row: int) -> int:
+        row_count = self._get_sheet_row_count(service, sheet_name)
+        values = self._get_range_values(service, f"{sheet_name}!L{start_row}:Q{row_count}")
+        row_number = start_row
+        saw_expense = False
+        for row in values:
+            if _is_expense_row(row):
+                saw_expense = True
+            elif saw_expense and not row:
+                return row_number - 1
+            row_number += 1
+        return row_count
+
     def _insert_rows_before(self, service, sheet_name: str, row_number: int, amount: int) -> None:
         if amount <= 0:
             return
@@ -243,6 +260,56 @@ class GoogleSheetsService:
             body={"requests": requests},
         ).execute()
 
+    def _copy_expense_row_layout(self, service, sheet_name: str, template_row: int, destination_row: int, amount: int) -> None:
+        if amount <= 0:
+            return
+
+        sheet_id = self._get_sheet_id(service, sheet_name)
+        requests = [
+            {
+                "copyPaste": {
+                    "source": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": template_row - 1,
+                        "endRowIndex": template_row,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "destination": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": destination_row - 1,
+                        "endRowIndex": destination_row - 1 + amount,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "pasteType": "PASTE_FORMAT",
+                    "pasteOrientation": "NORMAL",
+                }
+            }
+        ]
+
+        pixel_size = self._get_row_height(service, sheet_name, template_row)
+        if pixel_size is not None:
+            requests.append(
+                {
+                    "updateDimensionProperties": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "dimension": "ROWS",
+                            "startIndex": destination_row - 1,
+                            "endIndex": destination_row - 1 + amount,
+                        },
+                        "properties": {"pixelSize": pixel_size},
+                        "fields": "pixelSize",
+                    }
+                }
+            )
+
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id,
+            body={"requests": requests},
+        ).execute()
+
     def _sync_income_total_formula(self, service, sheet_name: str, start_row: int, total_row: int) -> None:
         service.spreadsheets().values().update(
             spreadsheetId=self.spreadsheet_id,
@@ -276,6 +343,14 @@ class GoogleSheetsService:
                 continue
             return row_metadata[0].get("pixelSize")
         return None
+
+    def _get_sheet_row_count(self, service, sheet_name: str) -> int:
+        response = service.spreadsheets().get(spreadsheetId=self.spreadsheet_id).execute()
+        for sheet in response.get("sheets", []):
+            properties = sheet.get("properties", {})
+            if properties.get("title") == sheet_name:
+                return properties.get("gridProperties", {}).get("rowCount", 1000)
+        raise ValueError(f"Nao foi possivel localizar a aba {sheet_name}.")
 
     def _build_service(self):
         if self.service_account_json:

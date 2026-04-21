@@ -44,18 +44,24 @@ class PluggyClient:
         for record in records:
             record_type = (record.get("type") or "").upper()
             amount = float(record.get("amount") or 0)
-            if record_type == "CREDIT" or amount <= 0:
+            if amount == 0:
                 continue
+
+            kind = "income" if record_type == "CREDIT" else "expense"
+            if not record_type:
+                kind = "income" if amount > 0 else "expense"
+            normalized_amount = abs(amount)
 
             date_value = record.get("date") or record.get("paymentDate") or datetime.now().isoformat()
             transactions.append(
                 Transaction(
                     description=record.get("description") or record.get("merchant") or "Lançamento Pluggy",
-                    amount=round(amount, 2),
+                    amount=round(normalized_amount, 2),
                     date=_format_date(date_value),
                     category=record.get("category") or "Pluggy",
                     payment_method=record.get("paymentData", {}).get("method") or "Conta bancária",
                     essential="SIM",
+                    kind=kind,
                 )
             )
 

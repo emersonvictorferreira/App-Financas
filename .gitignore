@@ -1,5 +1,12 @@
 .env
+.env.*
 credentials/
 uploads/
 __pycache__/
 *.pyc
+*.json
+!render.yaml
+*.apk
+*.xlsx
+android-app/
+ios-app/

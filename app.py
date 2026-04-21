@@ -70,18 +70,19 @@ def upload_pdf():
     destination = UPLOAD_DIR / filename
     uploaded.save(destination)
 
-    transactions = parse_statement_pdf(destination)
-    sheets = get_google_sheets_service()
-    if not sheets.is_configured():
-        return jsonify(
-            {
-                "ok": False,
-                "message": "PDF recebido, mas falta configurar o Google Sheets.",
-                "transactions": [transaction.to_dict() for transaction in transactions],
-            }
-        ), 400
-
+    transactions = []
     try:
+        transactions = parse_statement_pdf(destination)
+        sheets = get_google_sheets_service()
+        if not sheets.is_configured():
+            return jsonify(
+                {
+                    "ok": False,
+                    "message": "PDF recebido, mas falta configurar o Google Sheets.",
+                    "transactions": [transaction.to_dict() for transaction in transactions],
+                }
+            ), 400
+
         inserted_rows = sheets.append_transactions(transactions)
     except HttpError as exc:
         return _google_error_response(exc, transactions)
@@ -93,6 +94,8 @@ def upload_pdf():
                 "transactions": [transaction.to_dict() for transaction in transactions],
             }
         ), 500
+    finally:
+        destination.unlink(missing_ok=True)
 
     return jsonify(
         {
