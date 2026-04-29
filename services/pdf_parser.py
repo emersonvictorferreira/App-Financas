@@ -86,13 +86,18 @@ class Transaction:
         return asdict(self)
 
 
-def read_pdf_text(pdf_path: Path) -> str:
+def read_pdf_lines(pdf_path: Path) -> list[str]:
     reader = PdfReader(str(pdf_path))
-    return "\n".join((page.extract_text() or "") for page in reader.pages)
+    lines: list[str] = []
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        if text:
+            lines.extend(text.splitlines())
+    return lines
 
 
 def parse_statement_pdf(pdf_path: Path) -> list[Transaction]:
-    lines = _clean_lines(read_pdf_text(pdf_path).splitlines())
+    lines = _clean_lines(read_pdf_lines(pdf_path))
     transactions = _parse_nubank_statement(lines)
     if transactions:
         return transactions

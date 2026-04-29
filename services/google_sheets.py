@@ -43,11 +43,13 @@ class GoogleSheetsService:
         self.spreadsheet_id = spreadsheet_id
         self.range_template = range_template
         self.service_account_json = service_account_json
+        self._sheet_metadata_cache: dict[str, dict[str, int]] = {}
 
     def is_configured(self) -> bool:
         return bool(self.spreadsheet_id) and (bool(self.service_account_json) or self.credentials_path.exists())
 
     def append_transactions(self, transactions: Iterable[Transaction]) -> int:
+        self._sheet_metadata_cache = {}
         by_month: dict[str, dict[str, list[Transaction]]] = defaultdict(lambda: {"income": [], "expense": []})
         for transaction in transactions:
             month_name = _month_name_from_date(transaction.date)
@@ -789,12 +791,8 @@ class GoogleSheetsService:
         raise ValueError(f"Nao foi possivel localizar a linha '{label}' na aba {sheet_name}.")
 
     def _get_sheet_id(self, service, sheet_name: str) -> int:
-        response = service.spreadsheets().get(spreadsheetId=self.spreadsheet_id).execute()
-        for sheet in response.get("sheets", []):
-            properties = sheet.get("properties", {})
-            if properties.get("title") == sheet_name:
-                return properties["sheetId"]
-        raise ValueError(f"Nao foi possivel localizar a aba {sheet_name}.")
+        metadata = self._get_sheet_metadata(service, sheet_name)
+        return metadata["sheetId"]
 
     def _get_row_height(self, service, sheet_name: str, row_number: int) -> int | None:
         response = service.spreadsheets().get(
@@ -815,19 +813,39 @@ class GoogleSheetsService:
         return None
 
     def _get_sheet_row_count(self, service, sheet_name: str) -> int:
-        response = service.spreadsheets().get(spreadsheetId=self.spreadsheet_id).execute()
+        metadata = self._get_sheet_metadata(service, sheet_name)
+        return metadata.get("rowCount", 1000)
+
+    def _get_sheet_metadata(self, service, sheet_name: str) -> dict[str, int]:
+        cached = self._sheet_metadata_cache.get(sheet_name)
+        if cached is not None:
+            return cached
+
+        response = service.spreadsheets().get(
+            spreadsheetId=self.spreadsheet_id,
+            fields="sheets(properties(sheetId,title,gridProperties(rowCount)))",
+        ).execute()
         for sheet in response.get("sheets", []):
             properties = sheet.get("properties", {})
-            if properties.get("title") == sheet_name:
-                return properties.get("gridProperties", {}).get("rowCount", 1000)
-        raise ValueError(f"Nao foi possivel localizar a aba {sheet_name}.")
+            title = properties.get("title")
+            if not title:
+                continue
+            metadata = {
+                "sheetId": properties.get("sheetId", 0),
+                "rowCount": properties.get("gridProperties", {}).get("rowCount", 1000),
+            }
+            self._sheet_metadata_cache[title] = metadata
+
+        if sheet_name not in self._sheet_metadata_cache:
+            raise ValueError(f"Nao foi possivel localizar a aba {sheet_name}.")
+        return self._sheet_metadata_cache[sheet_name]
 
     def _build_service(self):
         if self.service_account_json:
             credentials = Credentials.from_service_account_info(json.loads(self.service_account_json), scopes=SCOPES)
         else:
             credentials = Credentials.from_service_account_file(str(self.credentials_path), scopes=SCOPES)
-        return build("sheets", "v4", credentials=credentials)
+        return build("sheets", "v4", credentials=credentials, cache_discovery=False)
 
 
 def _expense_signature(row: list[str | float]) -> tuple[str, str, str]:

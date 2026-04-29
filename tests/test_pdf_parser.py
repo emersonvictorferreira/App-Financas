@@ -10,16 +10,14 @@ from services.pdf_parser import parse_statement_pdf
 class PdfParserTests(unittest.TestCase):
     def test_parses_inline_debit_amounts(self):
         fake_pdf = Path("fake.pdf")
-        fake_text = "\n".join(
-            [
-                "10 ABR 2026 Total de saídas - 46,90",
-                "Compra no débito RESTAURANTE ESTACAO DA 46,90",
-                "12 ABR 2026 Total de saídas - 12,90",
-                "Compra no débito via NuPay EBW*Spotify 12,90",
-            ]
-        )
+        fake_lines = [
+            "10 ABR 2026 Total de saidas - 46,90",
+            "Compra no debito RESTAURANTE ESTACAO DA 46,90",
+            "12 ABR 2026 Total de saidas - 12,90",
+            "Compra no debito via NuPay EBW*Spotify 12,90",
+        ]
 
-        with patch("services.pdf_parser.read_pdf_text", return_value=fake_text):
+        with patch("services.pdf_parser.read_pdf_lines", return_value=fake_lines):
             transactions = parse_statement_pdf(fake_pdf)
 
         self.assertEqual(len(transactions), 2)
