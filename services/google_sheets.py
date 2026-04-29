@@ -58,6 +58,7 @@ class GoogleSheetsService:
         for month_name, grouped in by_month.items():
             total_rows += self._write_expenses(service, month_name, _sort_transactions(grouped["expense"]))
             total_rows += self._write_incomes(service, month_name, _sort_transactions(grouped["income"]))
+            self._sync_month_dashboard_formulas(service, _normalize_sheet_name(month_name))
         return total_rows
 
     def _write_expenses(self, service, month_name: str, transactions: list[Transaction]) -> int:
@@ -81,11 +82,12 @@ class GoogleSheetsService:
         if batch:
             service.spreadsheets().values().update(
                 spreadsheetId=self.spreadsheet_id,
-                range=f"{sheet_name}!L{start_row}:Q{start_row + len(batch) - 1}",
+                range=f"{sheet_name}!L{start_row}:N{start_row + len(batch) - 1}",
                 valueInputOption="USER_ENTERED",
-                body={"values": [transaction.to_expense_row() for transaction in batch]},
+                body={"values": [[row[0], row[1], row[2]] for row in (transaction.to_expense_row() for transaction in batch)]},
             ).execute()
             self._normalize_expense_block_layout(service, sheet_name, start_row, start_row + len(batch) - 1)
+            self._write_expense_dropdown_values(service, sheet_name, start_row, [transaction.to_expense_row() for transaction in batch])
 
         previous_signatures = {_expense_signature(transaction.to_expense_row()) for transaction in existing_transactions}
         current_signatures = {_expense_signature(transaction.to_expense_row()) for transaction in batch}
@@ -284,7 +286,47 @@ class GoogleSheetsService:
                         "startColumnIndex": 11,
                         "endColumnIndex": 17,
                     },
+                    "pasteType": "PASTE_NORMAL",
+                    "pasteOrientation": "NORMAL",
+                }
+            },
+            {
+                "copyPaste": {
+                    "source": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": template_row - 1,
+                        "endRowIndex": template_row,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "destination": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": destination_row - 1,
+                        "endRowIndex": destination_row - 1 + amount,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
                     "pasteType": "PASTE_FORMAT",
+                    "pasteOrientation": "NORMAL",
+                }
+            },
+            {
+                "copyPaste": {
+                    "source": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": template_row - 1,
+                        "endRowIndex": template_row,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "destination": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": destination_row - 1,
+                        "endRowIndex": destination_row - 1 + amount,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "pasteType": "PASTE_DATA_VALIDATION",
                     "pasteOrientation": "NORMAL",
                 }
             }
@@ -346,6 +388,26 @@ class GoogleSheetsService:
                 "copyPaste": {
                     "source": {
                         "sheetId": sheet_id,
+                        "startRowIndex": body_template_row - 1,
+                        "endRowIndex": body_template_row,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "destination": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": start_row - 1,
+                        "endRowIndex": end_row,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "pasteType": "PASTE_DATA_VALIDATION",
+                    "pasteOrientation": "NORMAL",
+                }
+            },
+            {
+                "copyPaste": {
+                    "source": {
+                        "sheetId": sheet_id,
                         "startRowIndex": first_template_row - 1,
                         "endRowIndex": first_template_row,
                         "startColumnIndex": 6,
@@ -359,6 +421,26 @@ class GoogleSheetsService:
                         "endColumnIndex": 10,
                     },
                     "pasteType": "PASTE_FORMAT",
+                    "pasteOrientation": "NORMAL",
+                }
+            },
+            {
+                "copyPaste": {
+                    "source": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": first_template_row - 1,
+                        "endRowIndex": first_template_row,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "destination": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": start_row - 1,
+                        "endRowIndex": start_row,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "pasteType": "PASTE_DATA_VALIDATION",
                     "pasteOrientation": "NORMAL",
                 }
             },
@@ -477,8 +559,49 @@ class GoogleSheetsService:
         sheet_id = self._get_sheet_id(service, sheet_name)
         first_template_row = start_row
         body_template_row = start_row + 1 if end_row > start_row else start_row
+        existing_values = self._get_range_values(service, f"{sheet_name}!L{start_row}:Q{end_row}")
 
         requests = [
+            {
+                "copyPaste": {
+                    "source": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": body_template_row - 1,
+                        "endRowIndex": body_template_row,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "destination": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": start_row - 1,
+                        "endRowIndex": end_row,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "pasteType": "PASTE_NORMAL",
+                    "pasteOrientation": "NORMAL",
+                }
+            },
+            {
+                "copyPaste": {
+                    "source": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": first_template_row - 1,
+                        "endRowIndex": first_template_row,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "destination": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": start_row - 1,
+                        "endRowIndex": start_row,
+                        "startColumnIndex": 11,
+                        "endColumnIndex": 17,
+                    },
+                    "pasteType": "PASTE_NORMAL",
+                    "pasteOrientation": "NORMAL",
+                }
+            },
             {
                 "copyPaste": {
                     "source": {
@@ -559,6 +682,56 @@ class GoogleSheetsService:
             body={"requests": requests},
         ).execute()
 
+        if existing_values:
+            service.spreadsheets().values().update(
+                spreadsheetId=self.spreadsheet_id,
+                range=f"{sheet_name}!L{start_row}:N{start_row + len(existing_values) - 1}",
+                valueInputOption="USER_ENTERED",
+                body={"values": [[row[0] if len(row) > 0 else "", row[1] if len(row) > 1 else "", row[2] if len(row) > 2 else ""] for row in existing_values]},
+            ).execute()
+            self._write_expense_dropdown_values(service, sheet_name, start_row, existing_values)
+
+    def _write_expense_dropdown_values(self, service, sheet_name: str, start_row: int, rows: list[list[str | float]]) -> None:
+        if not rows:
+            return
+
+        sheet_id = self._get_sheet_id(service, sheet_name)
+        request_rows = []
+        for row in rows:
+            category = str(row[3] if len(row) > 3 else "")
+            payment_method = str(row[4] if len(row) > 4 else "")
+            essential = str(row[5] if len(row) > 5 else "")
+            request_rows.append(
+                {
+                    "values": [
+                        {"userEnteredValue": {"stringValue": category}},
+                        {"userEnteredValue": {"stringValue": payment_method}},
+                        {"userEnteredValue": {"stringValue": essential}},
+                    ]
+                }
+            )
+
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id,
+            body={
+                "requests": [
+                    {
+                        "updateCells": {
+                            "rows": request_rows,
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": start_row - 1,
+                                "endRowIndex": start_row - 1 + len(request_rows),
+                                "startColumnIndex": 14,
+                                "endColumnIndex": 17,
+                            },
+                            "fields": "userEnteredValue",
+                        }
+                    }
+                ]
+            },
+        ).execute()
+
     def _sync_income_total_formula(self, service, sheet_name: str, start_row: int, total_row: int) -> None:
         service.spreadsheets().values().update(
             spreadsheetId=self.spreadsheet_id,
@@ -566,6 +739,54 @@ class GoogleSheetsService:
             valueInputOption="USER_ENTERED",
             body={"values": [["TOTAL", "", f"=SUM(I{start_row}:I{total_row - 1})"]]},
         ).execute()
+
+    def _sync_month_dashboard_formulas(self, service, sheet_name: str) -> None:
+        income_total_row = self._find_income_total_row(service, sheet_name)
+        self._sync_income_total_formula(service, sheet_name, 4, income_total_row)
+        fixed_row = self._find_label_row(service, sheet_name, "G", "gastos fixos", 16, 200)
+        variable_row = self._find_label_row(service, sheet_name, "G", "gastos variaveis", 16, 200)
+        expense_total_row = self._find_label_row(service, sheet_name, "G", "total", fixed_row, 200, occurrence=1)
+        investment_total_row = self._find_label_row(service, sheet_name, "G", "total reservado esse mes", 16, 200)
+
+        updates = [
+            [f"=I{income_total_row}", f"=I{expense_total_row}", f"=I{investment_total_row}", "=SUM(B9-C9-D9)"],
+            [f"=SUM(I{fixed_row}:I{variable_row})"],
+        ]
+
+        service.spreadsheets().values().update(
+            spreadsheetId=self.spreadsheet_id,
+            range=f"{sheet_name}!B9:E9",
+            valueInputOption="USER_ENTERED",
+            body={"values": [updates[0]]},
+        ).execute()
+        service.spreadsheets().values().update(
+            spreadsheetId=self.spreadsheet_id,
+            range=f"{sheet_name}!I{expense_total_row}",
+            valueInputOption="USER_ENTERED",
+            body={"values": [updates[1]]},
+        ).execute()
+
+    def _find_label_row(
+        self,
+        service,
+        sheet_name: str,
+        column_letter: str,
+        label: str,
+        start_row: int,
+        end_row: int,
+        occurrence: int = 1,
+    ) -> int:
+        values = self._get_range_values(service, f"{sheet_name}!{column_letter}{start_row}:{column_letter}{end_row}")
+        normalized_target = _strip_accents(_normalized_text(label))
+        matches = 0
+        for offset, row in enumerate(values):
+            cell_value = row[0] if row else ""
+            normalized_value = _strip_accents(_normalized_text(cell_value))
+            if normalized_value == normalized_target:
+                matches += 1
+                if matches == occurrence:
+                    return start_row + offset
+        raise ValueError(f"Nao foi possivel localizar a linha '{label}' na aba {sheet_name}.")
 
     def _get_sheet_id(self, service, sheet_name: str) -> int:
         response = service.spreadsheets().get(spreadsheetId=self.spreadsheet_id).execute()
@@ -816,7 +1037,16 @@ def _sort_transactions(transactions: list[Transaction]) -> list[Transaction]:
 
 
 def _parse_br_date(value: str) -> datetime:
-    return datetime.strptime(value, "%d/%m/%Y")
+    cleaned = str(value or "").replace("'", "").strip()
+    for fmt in ("%d/%m/%Y", "%d/%m"):
+        try:
+            parsed = datetime.strptime(cleaned, fmt)
+            if fmt == "%d/%m":
+                return parsed.replace(year=1900)
+            return parsed
+        except ValueError:
+            continue
+    raise ValueError(f"Data invalida no formato brasileiro: {value}")
 
 
 def _income_source_key(value: str) -> str:

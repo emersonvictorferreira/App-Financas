@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import Mock
 
-from services.google_sheets import GoogleSheetsService, _aggregate_income_transactions, _merge_income_sources
+from services.google_sheets import GoogleSheetsService, _aggregate_income_transactions, _merge_income_sources, _parse_br_date
 from services.pdf_parser import Transaction
 
 
@@ -14,6 +14,10 @@ class GoogleSheetsServiceTests(unittest.TestCase):
         self.values_api = Mock()
         self.spreadsheets_api = Mock()
         self.spreadsheets_api.values.return_value = self.values_api
+        self.spreadsheets_api.get.return_value.execute.return_value = {
+            "sheets": [{"properties": {"title": "ABRIL", "sheetId": 123}}]
+        }
+        self.spreadsheets_api.batchUpdate.return_value.execute.return_value = {}
         self.api.spreadsheets.return_value = self.spreadsheets_api
 
     def test_write_expenses_expands_when_block_is_full(self):
@@ -82,6 +86,13 @@ class GoogleSheetsServiceTests(unittest.TestCase):
 
         self.assertEqual(len(merged), 2)
         self.assertEqual([row.description for row in merged], ["Pix de SORIGIN... - 05/05", "Pix de SORIGIN... - 20/05"])
+
+    def test_parse_br_date_accepts_short_day_month(self):
+        parsed = _parse_br_date("20/04")
+
+        self.assertEqual(parsed.day, 20)
+        self.assertEqual(parsed.month, 4)
+        self.assertEqual(parsed.year, 1900)
 
 
 if __name__ == "__main__":
