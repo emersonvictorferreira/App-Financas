@@ -32,6 +32,26 @@ class UploadCleanupTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(saved_path.exists())
 
+    def test_upload_returns_success_when_only_secondary_sheet_adjustment_warns(self):
+        fake_sheets = Mock()
+        fake_sheets.is_configured.return_value = True
+        fake_sheets.append_transactions.return_value = 2
+        fake_sheets.last_warnings = ["ABRIL: ajuste secundario"]
+
+        with patch("app.parse_statement_pdf", return_value=[Transaction(description="Pix", amount=10.0, date="01/04/2026")]), \
+            patch("app.get_google_sheets_service", return_value=fake_sheets):
+            with app.test_client() as client:
+                response = client.post(
+                    "/api/upload-pdf",
+                    data={"pdf": (io.BytesIO(b"%PDF-1.4 fake"), "extrato.pdf")},
+                    content_type="multipart/form-data",
+                )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["ok"])
+        self.assertIn("Observacao", payload["message"])
+
 
 class PluggyClientTests(unittest.TestCase):
     def test_sync_transactions_keeps_credit_as_income(self):

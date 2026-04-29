@@ -68,24 +68,35 @@ class GoogleSheetsServiceTests(unittest.TestCase):
         aggregated = _aggregate_income_transactions(imported)
 
         self.assertEqual(len(aggregated), 2)
-        self.assertEqual(aggregated[0].description, "Pix de SORIGINAL - 05/05")
+        self.assertEqual(aggregated[0].description, "SORIGINAL - 05/05")
         self.assertEqual(aggregated[0].amount, 100.0)
-        self.assertEqual(aggregated[1].description, "Pix de SORIGINAL - 20/05")
+        self.assertEqual(aggregated[1].description, "SORIGINAL - 20/05")
         self.assertEqual(aggregated[1].amount, 150.0)
 
     def test_merge_income_sources_matches_existing_row_with_embedded_date(self):
         existing = [
-            Transaction(description="Pix de SORIGIN... - 05/05", amount=100.0, date="01/01/1900", kind="income"),
+            Transaction(description="SORIGIN... - 05/05", amount=100.0, date="01/01/1900", kind="income"),
         ]
         imported = [
-            Transaction(description="Pix de SORIGIN... - 05/05", amount=100.0, date="05/05/2026", kind="income"),
-            Transaction(description="Pix de SORIGIN... - 20/05", amount=150.0, date="20/05/2026", kind="income"),
+            Transaction(description="SORIGIN... - 05/05", amount=100.0, date="05/05/2026", kind="income"),
+            Transaction(description="SORIGIN... - 20/05", amount=150.0, date="20/05/2026", kind="income"),
         ]
 
         merged = _merge_income_sources(existing, imported)
 
         self.assertEqual(len(merged), 2)
-        self.assertEqual([row.description for row in merged], ["Pix de SORIGIN... - 05/05", "Pix de SORIGIN... - 20/05"])
+        self.assertEqual([row.description for row in merged], ["SORIGIN... - 05/05", "SORIGIN... - 20/05"])
+
+    def test_aggregate_income_transactions_uses_cleaner_aliases(self):
+        imported = [
+            Transaction(description="Transferencia recebida pelo Pix SMART CLUSTER SERVICOS TECNOLOGICOS LTDA", amount=30.0, date="06/04/2026", kind="income"),
+            Transaction(description="Transferencia recebida pelo Pix P D", amount=50.0, date="24/04/2026", kind="income"),
+            Transaction(description="Transferencia recebida pelo Pix GO TECNOLOGIA", amount=53.0, date="25/04/2026", kind="income"),
+        ]
+
+        aggregated = _aggregate_income_transactions(imported)
+
+        self.assertEqual([row.description for row in aggregated], ["GO - 25/04", "PD - 24/04", "Smart Cluster - 06/04"])
 
     def test_parse_br_date_accepts_short_day_month(self):
         parsed = _parse_br_date("20/04")

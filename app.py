@@ -84,6 +84,7 @@ def upload_pdf():
             ), 400
 
         inserted_rows = sheets.append_transactions(transactions)
+        warnings = getattr(sheets, "last_warnings", [])
     except HttpError as exc:
         return _google_error_response(exc, transactions)
     except Exception as exc:
@@ -100,7 +101,7 @@ def upload_pdf():
     return jsonify(
         {
             "ok": True,
-            "message": f"{inserted_rows} lancamentos enviados para o Google Sheets.",
+            "message": _upload_success_message(inserted_rows, warnings),
             "transactions": [transaction.to_dict() for transaction in transactions],
         }
     )
@@ -128,6 +129,7 @@ def sync_pluggy():
 
     try:
         inserted_rows = sheets.append_transactions(transactions)
+        warnings = getattr(sheets, "last_warnings", [])
     except HttpError as exc:
         return _google_error_response(exc, transactions)
     except Exception as exc:
@@ -142,7 +144,7 @@ def sync_pluggy():
     return jsonify(
         {
             "ok": True,
-            "message": f"{inserted_rows} lancamentos da Pluggy enviados para o Google Sheets.",
+            "message": _sync_success_message(inserted_rows, warnings),
             "transactions": [transaction.to_dict() for transaction in transactions],
         }
     )
@@ -179,6 +181,20 @@ def _google_error_response(exc: HttpError, transactions) -> tuple:
         ),
         status_code,
     )
+
+
+def _upload_success_message(inserted_rows: int, warnings: list[str]) -> str:
+    message = f"{inserted_rows} lancamentos enviados para o Google Sheets."
+    if warnings:
+        return f"{message} Observacao: a planilha foi atualizada, mas houve um ajuste secundario pendente."
+    return message
+
+
+def _sync_success_message(inserted_rows: int, warnings: list[str]) -> str:
+    message = f"{inserted_rows} lancamentos da Pluggy enviados para o Google Sheets."
+    if warnings:
+        return f"{message} Observacao: a planilha foi atualizada, mas houve um ajuste secundario pendente."
+    return message
 
 
 if __name__ == "__main__":

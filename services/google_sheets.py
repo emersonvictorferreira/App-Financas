@@ -44,12 +44,14 @@ class GoogleSheetsService:
         self.range_template = range_template
         self.service_account_json = service_account_json
         self._sheet_metadata_cache: dict[str, dict[str, int]] = {}
+        self.last_warnings: list[str] = []
 
     def is_configured(self) -> bool:
         return bool(self.spreadsheet_id) and (bool(self.service_account_json) or self.credentials_path.exists())
 
     def append_transactions(self, transactions: Iterable[Transaction]) -> int:
         self._sheet_metadata_cache = {}
+        self.last_warnings = []
         by_month: dict[str, dict[str, list[Transaction]]] = defaultdict(lambda: {"income": [], "expense": []})
         for transaction in transactions:
             month_name = _month_name_from_date(transaction.date)
@@ -60,7 +62,11 @@ class GoogleSheetsService:
         for month_name, grouped in by_month.items():
             total_rows += self._write_expenses(service, month_name, _sort_transactions(grouped["expense"]))
             total_rows += self._write_incomes(service, month_name, _sort_transactions(grouped["income"]))
-            self._sync_month_dashboard_formulas(service, _normalize_sheet_name(month_name))
+            sheet_name = _normalize_sheet_name(month_name)
+            try:
+                self._sync_month_dashboard_formulas(service, sheet_name)
+            except Exception as exc:
+                self.last_warnings.append(f"{sheet_name}: {exc}")
         return total_rows
 
     def _write_expenses(self, service, month_name: str, transactions: list[Transaction]) -> int:
@@ -362,91 +368,38 @@ class GoogleSheetsService:
 
         sheet_id = self._get_sheet_id(service, sheet_name)
         self._unmerge_income_rows(service, sheet_id, start_row, end_row)
-        first_template_row = start_row
-        body_template_row = start_row + 1 if end_row > start_row else start_row
+        odd_template_row = start_row
+        even_template_row = start_row + 1 if end_row > start_row else start_row
 
-        requests = [
-            {
-                "copyPaste": {
-                    "source": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": body_template_row - 1,
-                        "endRowIndex": body_template_row,
-                        "startColumnIndex": 6,
-                        "endColumnIndex": 10,
-                    },
-                    "destination": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": start_row - 1,
-                        "endRowIndex": end_row,
-                        "startColumnIndex": 6,
-                        "endColumnIndex": 10,
-                    },
-                    "pasteType": "PASTE_FORMAT",
-                    "pasteOrientation": "NORMAL",
+        requests = []
+        for row_number in range(start_row, end_row + 1):
+            template_row = odd_template_row if (row_number - start_row) % 2 == 0 else even_template_row
+            requests.append(
+                {
+                    "copyPaste": {
+                        "source": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": template_row - 1,
+                            "endRowIndex": template_row,
+                            "startColumnIndex": 6,
+                            "endColumnIndex": 10,
+                        },
+                        "destination": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": row_number - 1,
+                            "endRowIndex": row_number,
+                            "startColumnIndex": 6,
+                            "endColumnIndex": 10,
+                        },
+                        "pasteType": "PASTE_FORMAT",
+                        "pasteOrientation": "NORMAL",
+                    }
                 }
-            },
-            {
-                "copyPaste": {
-                    "source": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": body_template_row - 1,
-                        "endRowIndex": body_template_row,
-                        "startColumnIndex": 11,
-                        "endColumnIndex": 17,
-                    },
-                    "destination": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": start_row - 1,
-                        "endRowIndex": end_row,
-                        "startColumnIndex": 11,
-                        "endColumnIndex": 17,
-                    },
-                    "pasteType": "PASTE_DATA_VALIDATION",
-                    "pasteOrientation": "NORMAL",
-                }
-            },
-            {
-                "copyPaste": {
-                    "source": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": first_template_row - 1,
-                        "endRowIndex": first_template_row,
-                        "startColumnIndex": 6,
-                        "endColumnIndex": 10,
-                    },
-                    "destination": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": start_row - 1,
-                        "endRowIndex": start_row,
-                        "startColumnIndex": 6,
-                        "endColumnIndex": 10,
-                    },
-                    "pasteType": "PASTE_FORMAT",
-                    "pasteOrientation": "NORMAL",
-                }
-            },
-            {
-                "copyPaste": {
-                    "source": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": first_template_row - 1,
-                        "endRowIndex": first_template_row,
-                        "startColumnIndex": 11,
-                        "endColumnIndex": 17,
-                    },
-                    "destination": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": start_row - 1,
-                        "endRowIndex": start_row,
-                        "startColumnIndex": 11,
-                        "endColumnIndex": 17,
-                    },
-                    "pasteType": "PASTE_DATA_VALIDATION",
-                    "pasteOrientation": "NORMAL",
-                }
-            },
-            {
+            )
+
+        requests.extend(
+            [
+                {
                 "updateBorders": {
                     "range": {
                         "sheetId": sheet_id,
@@ -480,9 +433,10 @@ class GoogleSheetsService:
                     "fields": "userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment",
                 }
             },
-        ]
+            ]
+        )
 
-        pixel_size = self._get_row_height(service, sheet_name, body_template_row)
+        pixel_size = self._get_row_height(service, sheet_name, even_template_row)
         if pixel_size is not None:
             requests.append(
                 {
@@ -572,88 +526,35 @@ class GoogleSheetsService:
         body_template_row = start_row + 1 if end_row > start_row else start_row
         existing_values = self._get_range_values(service, f"{sheet_name}!L{start_row}:Q{end_row}")
 
-        requests = [
-            {
-                "copyPaste": {
-                    "source": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": body_template_row - 1,
-                        "endRowIndex": body_template_row,
-                        "startColumnIndex": 11,
-                        "endColumnIndex": 17,
-                    },
-                    "destination": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": start_row - 1,
-                        "endRowIndex": end_row,
-                        "startColumnIndex": 11,
-                        "endColumnIndex": 17,
-                    },
-                    "pasteType": "PASTE_NORMAL",
-                    "pasteOrientation": "NORMAL",
+        requests = []
+        for row_number in range(start_row, end_row + 1):
+            template_row = first_template_row if (row_number - start_row) % 2 == 0 else body_template_row
+            requests.append(
+                {
+                    "copyPaste": {
+                        "source": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": template_row - 1,
+                            "endRowIndex": template_row,
+                            "startColumnIndex": 11,
+                            "endColumnIndex": 17,
+                        },
+                        "destination": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": row_number - 1,
+                            "endRowIndex": row_number,
+                            "startColumnIndex": 11,
+                            "endColumnIndex": 17,
+                        },
+                        "pasteType": "PASTE_FORMAT",
+                        "pasteOrientation": "NORMAL",
+                    }
                 }
-            },
-            {
-                "copyPaste": {
-                    "source": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": first_template_row - 1,
-                        "endRowIndex": first_template_row,
-                        "startColumnIndex": 11,
-                        "endColumnIndex": 17,
-                    },
-                    "destination": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": start_row - 1,
-                        "endRowIndex": start_row,
-                        "startColumnIndex": 11,
-                        "endColumnIndex": 17,
-                    },
-                    "pasteType": "PASTE_NORMAL",
-                    "pasteOrientation": "NORMAL",
-                }
-            },
-            {
-                "copyPaste": {
-                    "source": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": body_template_row - 1,
-                        "endRowIndex": body_template_row,
-                        "startColumnIndex": 11,
-                        "endColumnIndex": 17,
-                    },
-                    "destination": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": start_row - 1,
-                        "endRowIndex": end_row,
-                        "startColumnIndex": 11,
-                        "endColumnIndex": 17,
-                    },
-                    "pasteType": "PASTE_FORMAT",
-                    "pasteOrientation": "NORMAL",
-                }
-            },
-            {
-                "copyPaste": {
-                    "source": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": first_template_row - 1,
-                        "endRowIndex": first_template_row,
-                        "startColumnIndex": 11,
-                        "endColumnIndex": 17,
-                    },
-                    "destination": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": start_row - 1,
-                        "endRowIndex": start_row,
-                        "startColumnIndex": 11,
-                        "endColumnIndex": 17,
-                    },
-                    "pasteType": "PASTE_FORMAT",
-                    "pasteOrientation": "NORMAL",
-                }
-            },
-            {
+            )
+
+        requests.extend(
+            [
+                {
                 "updateBorders": {
                     "range": {
                         "sheetId": sheet_id,
@@ -668,8 +569,9 @@ class GoogleSheetsService:
                         "color": {},
                     },
                 }
-            },
-        ]
+                },
+            ]
+        )
 
         pixel_size = self._get_row_height(service, sheet_name, body_template_row)
         if pixel_size is not None:
@@ -692,6 +594,7 @@ class GoogleSheetsService:
             spreadsheetId=self.spreadsheet_id,
             body={"requests": requests},
         ).execute()
+        self._apply_expense_dropdown_validations(service, sheet_id, start_row, end_row)
 
         if existing_values:
             service.spreadsheets().values().update(
@@ -709,9 +612,9 @@ class GoogleSheetsService:
         sheet_id = self._get_sheet_id(service, sheet_name)
         request_rows = []
         for row in rows:
-            category = str(row[3] if len(row) > 3 else "")
-            payment_method = str(row[4] if len(row) > 4 else "")
-            essential = str(row[5] if len(row) > 5 else "")
+            category = _canonical_expense_category(str(row[3] if len(row) > 3 else ""))
+            payment_method = _canonical_payment_method(str(row[4] if len(row) > 4 else ""))
+            essential = _canonical_essential(str(row[5] if len(row) > 5 else ""))
             request_rows.append(
                 {
                     "values": [
@@ -739,6 +642,81 @@ class GoogleSheetsService:
                             "fields": "userEnteredValue",
                         }
                     }
+                ]
+            },
+        ).execute()
+
+    def _apply_expense_dropdown_validations(self, service, sheet_id: int, start_row: int, end_row: int) -> None:
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id,
+            body={
+                "requests": [
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": start_row - 1,
+                                "endRowIndex": end_row,
+                                "startColumnIndex": 14,
+                                "endColumnIndex": 15,
+                            },
+                            "cell": {
+                                "dataValidation": {
+                                    "condition": {
+                                        "type": "ONE_OF_RANGE",
+                                        "values": [{"userEnteredValue": "='UTILITÁRIO'!$H$31:$H$44"}],
+                                    },
+                                    "strict": True,
+                                    "showCustomUi": True,
+                                }
+                            },
+                            "fields": "dataValidation",
+                        }
+                    },
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": start_row - 1,
+                                "endRowIndex": end_row,
+                                "startColumnIndex": 15,
+                                "endColumnIndex": 16,
+                            },
+                            "cell": {
+                                "dataValidation": {
+                                    "condition": {
+                                        "type": "ONE_OF_RANGE",
+                                        "values": [{"userEnteredValue": "='UTILITÁRIO'!$E$31:$E$35"}],
+                                    },
+                                    "strict": True,
+                                    "showCustomUi": True,
+                                }
+                            },
+                            "fields": "dataValidation",
+                        }
+                    },
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": start_row - 1,
+                                "endRowIndex": end_row,
+                                "startColumnIndex": 16,
+                                "endColumnIndex": 17,
+                            },
+                            "cell": {
+                                "dataValidation": {
+                                    "condition": {
+                                        "type": "ONE_OF_LIST",
+                                        "values": [{"userEnteredValue": "✔️"}, {"userEnteredValue": "❌"}],
+                                    },
+                                    "strict": True,
+                                    "showCustomUi": True,
+                                }
+                            },
+                            "fields": "dataValidation",
+                        }
+                    },
                 ]
             },
         ).execute()
@@ -888,9 +866,9 @@ def _existing_expense_transactions(values: list[list[str]]) -> list[Transaction]
                 description=str(row[0]).strip(),
                 amount=_as_float(row[1]),
                 date=str(row[2]).replace("'", "").strip(),
-                category=str(row[3]).strip() if len(row) > 3 else "Outros",
-                payment_method=str(row[4]).strip() if len(row) > 4 else "Dinheiro / Pix",
-                essential=str(row[5]).strip() if len(row) > 5 else "SIM",
+                category=_canonical_expense_category(str(row[3]).strip() if len(row) > 3 else ""),
+                payment_method=_canonical_payment_method(str(row[4]).strip() if len(row) > 4 else ""),
+                essential=_canonical_essential(str(row[5]).strip() if len(row) > 5 else ""),
                 kind="expense",
             )
         )
@@ -1080,6 +1058,46 @@ def _income_source_key(value: str) -> str:
     return _strip_accents(_normalized_text(_canonical_income_name(value)))
 
 
+def _canonical_expense_category(value: str) -> str:
+    normalized = _strip_accents(_normalized_text(value))
+    mapping = {
+        "supermercado": "🛒 Supermercado",
+        "alimentacao": "🍔 Alimentação",
+        "transporte": "🚗 Transporte",
+        "lazer": "🎉 Lazer",
+        "gastos pessoais": "💆‍♂️ Gastos Pessoais",
+        "saude e bem estar": "🩺 Saúde e bem-estar",
+        "presentes": "🎁 Presentes",
+        "pets": "🐾 Pets",
+        "moradia": "🏠 Moradia",
+        "assinaturas": "📺 Assinaturas",
+        "servicos domesticos": "⚡ Serviços domésticos",
+        "parcelamentos": "💳 Parcelamentos",
+        "mensalidades": "💪 Mensalidades",
+        "outros": "🧾 Outros",
+    }
+    return mapping.get(normalized, "🧾 Outros")
+
+
+def _canonical_payment_method(value: str) -> str:
+    normalized = _strip_accents(_normalized_text(value))
+    mapping = {
+        "dinheiro / pix": "💸 Dinheiro / Pix",
+        "credito": "💳 Crédito",
+        "debito": "💳 Débito",
+        "vale": "🎟️ Vale",
+        "boleto": "💲 Boleto",
+    }
+    return mapping.get(normalized, "💸 Dinheiro / Pix")
+
+
+def _canonical_essential(value: str) -> str:
+    text = str(value or "").strip()
+    if text in {"❌", "NAO", "NÃO", "nao", "não", "x"}:
+        return "❌"
+    return "✔️"
+
+
 def _expense_description_key(value: str) -> str:
     return _strip_accents(_normalized_text(_canonical_expense_description(str(value or ""))))
 
@@ -1127,7 +1145,7 @@ def _strip_accents(value: str) -> str:
 
 
 def _canonical_income_description(value: str) -> str:
-    return f"Pix de {_canonical_income_name(value)}"
+    return _canonical_income_name(value)
 
 
 def _income_display_description(value: str, date: str) -> str:
@@ -1138,7 +1156,7 @@ def _income_display_description(value: str, date: str) -> str:
 def _normalize_existing_income_description(transaction: Transaction) -> str:
     embedded_date = _extract_income_display_date(transaction.description)
     if embedded_date:
-        return _limit_income_text(transaction.description.strip(), 24)
+        return _limit_income_text(f"{_canonical_income_description(transaction.description)} - {embedded_date}", 24)
     if transaction.date and transaction.date != "01/01/1900":
         return _income_display_description(transaction.description, transaction.date)
     return _limit_income_text(_canonical_income_description(transaction.description), 24)
@@ -1191,6 +1209,7 @@ def _canonical_income_name(value: str) -> str:
     raw = re.sub(r"^pix de\s+", "", raw)
     raw = re.sub(r"^transferencia recebida\s*", "", raw)
     raw = re.sub(r"^transferencia rec(?:ebida)?\s*", "", raw)
+    raw = re.sub(r"^pelo\s+", "", raw)
     raw = re.sub(r"\b(recebida|recebido|pix|ted|doc)\b", " ", raw)
     raw = re.sub(r"[^a-z0-9]+", " ", raw)
     raw = " ".join(raw.split())
@@ -1201,8 +1220,8 @@ def _canonical_income_name(value: str) -> str:
         "direct": "DIRECT",
         "emerson victor": "EMERSON",
         "emerson": "EMERSON",
-        "fernando mont": "FERNANDO",
-        "fernando": "FERNANDO",
+        "fernando mont": "Fernando",
+        "fernando": "Fernando",
         "future tecnologia": "FUTURE",
         "future": "FUTURE",
         "nexabet recebi": "NEXABET",
@@ -1224,10 +1243,17 @@ def _canonical_income_name(value: str) -> str:
         "phoenix": "Phoenix",
         "smart cluster": "Smart Cluster",
         "r torres": "R Torres",
-        "r ": "R",
         "x vit": "X Vit",
-        "p d": "P",
-        "p ": "P",
+        "gdsp technology": "GDSP",
+        "gdsp": "GDSP",
+        "jrr intermediacao": "JRR",
+        "jrr": "JRR",
+        "go tecnologia": "GO",
+        "go": "GO",
+        "verdata tecnol": "Verdata",
+        "verdata": "Verdata",
+        "rlopes10": "Rlopes10",
+        "p d": "PD",
         "sandra vilela": "Sandra",
         "sandra": "Sandra",
     }
