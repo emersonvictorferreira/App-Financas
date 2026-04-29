@@ -361,7 +361,7 @@ class GoogleSheetsService:
             return
 
         sheet_id = self._get_sheet_id(service, sheet_name)
-        self._remerge_income_rows(service, sheet_id, start_row, end_row)
+        self._unmerge_income_rows(service, sheet_id, start_row, end_row)
         first_template_row = start_row
         body_template_row = start_row + 1 if end_row > start_row else start_row
 
@@ -503,21 +503,30 @@ class GoogleSheetsService:
             spreadsheetId=self.spreadsheet_id,
             body={"requests": requests},
         ).execute()
+        self._remerge_income_rows(service, sheet_id, start_row, end_row)
+
+    def _unmerge_income_rows(self, service, sheet_id: int, start_row: int, end_row: int) -> None:
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id,
+            body={
+                "requests": [
+                    {
+                        "unmergeCells": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": start_row - 1,
+                                "endRowIndex": end_row,
+                                "startColumnIndex": 6,
+                                "endColumnIndex": 10,
+                            }
+                        }
+                    }
+                ]
+            },
+        ).execute()
 
     def _remerge_income_rows(self, service, sheet_id: int, start_row: int, end_row: int) -> None:
-        requests = [
-            {
-                "unmergeCells": {
-                    "range": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": start_row - 1,
-                        "endRowIndex": end_row,
-                        "startColumnIndex": 6,
-                        "endColumnIndex": 10,
-                    }
-                }
-            }
-        ]
+        requests = []
 
         for row_number in range(start_row, end_row + 1):
             requests.append(
