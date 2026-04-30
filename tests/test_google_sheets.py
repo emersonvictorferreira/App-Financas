@@ -145,6 +145,25 @@ class GoogleSheetsServiceTests(unittest.TestCase):
         self.assertEqual(parsed.month, 4)
         self.assertEqual(parsed.year, 1900)
 
+    def test_sync_month_dashboard_formulas_uses_live_expense_block(self):
+        self.service._find_income_total_row = Mock(return_value=71)
+        self.service._find_expense_start_row = Mock(return_value=79)
+        self.service._find_expense_end_row = Mock(return_value=160)
+        self.service._find_label_row = Mock(side_effect=[76, 77, 85, 97])
+        self.values_api.update.return_value.execute.return_value = {}
+
+        self.service._sync_month_dashboard_formulas(self.api, "ABRIL")
+
+        update_calls = self.values_api.update.call_args_list
+        self.assertEqual(update_calls[0].kwargs["range"], "ABRIL!G71:I71")
+        self.assertEqual(update_calls[1].kwargs["range"], "ABRIL!B9:E9")
+        self.assertEqual(update_calls[2].kwargs["range"], "ABRIL!I76")
+        self.assertEqual(update_calls[2].kwargs["body"]["values"], [["=0"]])
+        self.assertEqual(update_calls[3].kwargs["range"], "ABRIL!I77")
+        self.assertEqual(update_calls[3].kwargs["body"]["values"], [["=SUM(M79:M160)"]])
+        self.assertEqual(update_calls[4].kwargs["range"], "ABRIL!I85")
+        self.assertEqual(update_calls[4].kwargs["body"]["values"], [["=SUM(I76:I77)"]])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -732,27 +732,38 @@ class GoogleSheetsService:
     def _sync_month_dashboard_formulas(self, service, sheet_name: str) -> None:
         income_total_row = self._find_income_total_row(service, sheet_name)
         self._sync_income_total_formula(service, sheet_name, 4, income_total_row)
+        expense_start_row = self._find_expense_start_row(service, sheet_name)
+        expense_end_row = self._find_expense_end_row(service, sheet_name, expense_start_row)
         fixed_row = self._find_label_row(service, sheet_name, "G", "gastos fixos", 16, 200)
         variable_row = self._find_label_row(service, sheet_name, "G", "gastos variaveis", 16, 200)
         expense_total_row = self._find_label_row(service, sheet_name, "G", "total", fixed_row, 200, occurrence=1)
         investment_total_row = self._find_label_row(service, sheet_name, "G", "total reservado esse mes", 16, 200)
 
-        updates = [
-            [f"=I{income_total_row}", f"=I{expense_total_row}", f"=I{investment_total_row}", "=SUM(B9-C9-D9)"],
-            [f"=SUM(I{fixed_row}:I{variable_row})"],
-        ]
+        card_updates = [f"=I{income_total_row}", f"=I{expense_total_row}", f"=I{investment_total_row}", "=SUM(B9-C9-D9)"]
 
         service.spreadsheets().values().update(
             spreadsheetId=self.spreadsheet_id,
             range=f"{sheet_name}!B9:E9",
             valueInputOption="USER_ENTERED",
-            body={"values": [updates[0]]},
+            body={"values": [card_updates]},
+        ).execute()
+        service.spreadsheets().values().update(
+            spreadsheetId=self.spreadsheet_id,
+            range=f"{sheet_name}!I{fixed_row}",
+            valueInputOption="USER_ENTERED",
+            body={"values": [["=0"]]},
+        ).execute()
+        service.spreadsheets().values().update(
+            spreadsheetId=self.spreadsheet_id,
+            range=f"{sheet_name}!I{variable_row}",
+            valueInputOption="USER_ENTERED",
+            body={"values": [[f"=SUM(M{expense_start_row}:M{expense_end_row})"]]},
         ).execute()
         service.spreadsheets().values().update(
             spreadsheetId=self.spreadsheet_id,
             range=f"{sheet_name}!I{expense_total_row}",
             valueInputOption="USER_ENTERED",
-            body={"values": [updates[1]]},
+            body={"values": [[f"=SUM(I{fixed_row}:I{variable_row})"]]},
         ).execute()
 
     def _find_label_row(
