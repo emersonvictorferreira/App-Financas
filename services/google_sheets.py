@@ -968,15 +968,11 @@ def _merge_expenses(existing_transactions: list[Transaction], imported_transacti
 
 
 def _aggregate_income_transactions(transactions: list[Transaction]) -> list[Transaction]:
-    grouped: dict[tuple[str, str], Transaction] = {}
+    normalized: list[Transaction] = []
     for transaction in transactions:
-        source_key = _income_source_key(transaction.description)
-        key = (source_key, transaction.date)
-        canonical_description = _income_display_description(transaction.description, transaction.date)
-        current = grouped.get(key)
-        if current is None:
-            grouped[key] = Transaction(
-                description=canonical_description,
+        normalized.append(
+            Transaction(
+                description=_income_display_description(transaction.description, transaction.date),
                 amount=transaction.amount,
                 date=transaction.date,
                 category=transaction.category,
@@ -984,43 +980,40 @@ def _aggregate_income_transactions(transactions: list[Transaction]) -> list[Tran
                 essential=transaction.essential,
                 kind="income",
             )
-            continue
-
-        grouped[key] = Transaction(
-            description=current.description,
-            amount=round(current.amount + transaction.amount, 2),
-            date=current.date,
-            category=current.category,
-            payment_method=current.payment_method,
-            essential=current.essential,
-            kind="income",
         )
 
-    return sorted(grouped.values(), key=lambda transaction: _normalized_text(transaction.description))
+    return sorted(normalized, key=lambda transaction: (_parse_br_date(transaction.date), _normalized_text(transaction.description), transaction.amount))
 
 
 def _merge_income_sources(existing_transactions: list[Transaction], imported_transactions: list[Transaction]) -> list[Transaction]:
-    grouped: dict[tuple[str, str], Transaction] = {}
+    existing_grouped: dict[tuple[str, str], list[Transaction]] = defaultdict(list)
+    imported_grouped: dict[tuple[str, str], list[Transaction]] = defaultdict(list)
 
     for transaction in existing_transactions:
         key = _income_merge_key(transaction)
-        grouped[key] = Transaction(
-            description=_normalize_existing_income_description(transaction),
-            amount=transaction.amount,
-            date=transaction.date,
-            category=transaction.category,
-            payment_method=transaction.payment_method,
-            essential=transaction.essential,
-            kind="income",
+        existing_grouped[key].append(
+            Transaction(
+                description=_normalize_existing_income_description(transaction),
+                amount=transaction.amount,
+                date=transaction.date,
+                category=transaction.category,
+                payment_method=transaction.payment_method,
+                essential=transaction.essential,
+                kind="income",
+            )
         )
 
     for transaction in imported_transactions:
-        key = _income_merge_key(transaction)
-        current = grouped.get(key)
-        if current is None or transaction.amount >= current.amount:
-            grouped[key] = transaction
+        imported_grouped[_income_merge_key(transaction)].append(transaction)
 
-    return sorted(grouped.values(), key=lambda transaction: (_parse_br_date(transaction.date), _normalized_text(transaction.description)))
+    merged: list[Transaction] = []
+    for key in existing_grouped.keys() | imported_grouped.keys():
+        if imported_grouped.get(key):
+            merged.extend(imported_grouped[key])
+        else:
+            merged.extend(existing_grouped[key])
+
+    return sorted(merged, key=lambda transaction: (_parse_br_date(transaction.date), _normalized_text(transaction.description), transaction.amount))
 
 
 def _month_name_from_date(date_str: str) -> str:
@@ -1241,6 +1234,7 @@ def _canonical_income_name(value: str) -> str:
         "phoenix gaming": "Phoenix",
         "phoenix ga": "Phoenix",
         "phoenix": "Phoenix",
+        "smart": "Smart Cluster",
         "smart cluster": "Smart Cluster",
         "r torres": "R Torres",
         "x vit": "X Vit",
@@ -1253,6 +1247,7 @@ def _canonical_income_name(value: str) -> str:
         "verdata tecnol": "Verdata",
         "verdata": "Verdata",
         "rlopes10": "Rlopes10",
+        "p": "PD",
         "p d": "PD",
         "sandra vilela": "Sandra",
         "sandra": "Sandra",

@@ -96,7 +96,47 @@ class GoogleSheetsServiceTests(unittest.TestCase):
 
         aggregated = _aggregate_income_transactions(imported)
 
-        self.assertEqual([row.description for row in aggregated], ["GO - 25/04", "PD - 24/04", "Smart Cluster - 06/04"])
+        self.assertEqual([row.description for row in aggregated], ["Smart Cluster - 06/04", "PD - 24/04", "GO - 25/04"])
+
+    def test_aggregate_income_transactions_keeps_same_source_same_day_separate(self):
+        imported = [
+            Transaction(description="Pix de Smart Cluster", amount=85.0, date="25/04/2026", kind="income"),
+            Transaction(description="Pix de Smart Cluster", amount=35.0, date="25/04/2026", kind="income"),
+            Transaction(description="Pix de Smart Cluster", amount=99.0, date="25/04/2026", kind="income"),
+        ]
+
+        aggregated = _aggregate_income_transactions(imported)
+
+        self.assertEqual([row.amount for row in aggregated], [35.0, 85.0, 99.0])
+        self.assertEqual([row.description for row in aggregated], ["Smart Cluster - 25/04", "Smart Cluster - 25/04", "Smart Cluster - 25/04"])
+
+    def test_merge_income_sources_collapses_legacy_short_aliases(self):
+        existing = [
+            Transaction(description="Smart - 06/04", amount=30.0, date="01/01/1900", kind="income"),
+            Transaction(description="P - 24/04", amount=50.0, date="01/01/1900", kind="income"),
+        ]
+        imported = [
+            Transaction(description="Smart Cluster - 06/04", amount=30.0, date="06/04/2026", kind="income"),
+            Transaction(description="PD - 24/04", amount=50.0, date="24/04/2026", kind="income"),
+        ]
+
+        merged = _merge_income_sources(existing, imported)
+
+        self.assertEqual([row.description for row in merged], ["Smart Cluster - 06/04", "PD - 24/04"])
+
+    def test_merge_income_sources_replaces_legacy_daily_sum_with_individual_entries(self):
+        existing = [
+            Transaction(description="Smart Cluster - 25/04", amount=219.0, date="01/01/1900", kind="income"),
+        ]
+        imported = [
+            Transaction(description="Smart Cluster - 25/04", amount=85.0, date="25/04/2026", kind="income"),
+            Transaction(description="Smart Cluster - 25/04", amount=35.0, date="25/04/2026", kind="income"),
+            Transaction(description="Smart Cluster - 25/04", amount=99.0, date="25/04/2026", kind="income"),
+        ]
+
+        merged = _merge_income_sources(existing, imported)
+
+        self.assertEqual([row.amount for row in merged], [35.0, 85.0, 99.0])
 
     def test_parse_br_date_accepts_short_day_month(self):
         parsed = _parse_br_date("20/04")
