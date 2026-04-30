@@ -5,6 +5,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
+from flask import Response
 from googleapiclient.errors import HttpError
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
@@ -55,6 +56,11 @@ def index():
 @app.get("/api/health")
 def health():
     return jsonify({"ok": True, "message": "Servidor online."})
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return Response(status=204)
 
 
 @app.post("/api/upload-pdf")

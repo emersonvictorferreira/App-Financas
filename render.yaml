@@ -3,6 +3,9 @@ services:
     name: financeiro-mobile-web
     runtime: python
     plan: free
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.4
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app
     autoDeploy: true
