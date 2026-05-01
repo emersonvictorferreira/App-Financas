@@ -921,6 +921,8 @@ class GoogleSheetsService:
         ).execute()
 
     def _sync_expense_auxiliary_formulas(self, service, sheet_name: str, expense_start_row: int, expense_end_row: int) -> None:
+        essential_yes_row: int | None = None
+        essential_no_row: int | None = None
         try:
             essential_yes_row = self._find_label_row(service, sheet_name, "B", "✔️", expense_end_row, expense_end_row + 40)
             service.spreadsheets().values().update(
@@ -953,6 +955,79 @@ class GoogleSheetsService:
             ).execute()
         except ValueError:
             pass
+
+        if essential_yes_row and essential_no_row:
+            self._sync_essential_chart(service, sheet_name, essential_yes_row, essential_no_row)
+
+    def _sync_essential_chart(self, service, sheet_name: str, essential_yes_row: int, essential_no_row: int) -> None:
+        chart = self._find_sheet_chart(service, sheet_name, anchor_row_index=7, anchor_column_index=21)
+        if chart is None:
+            return
+
+        sheet_id = self._get_sheet_id(service, sheet_name)
+        start_row_index = min(essential_yes_row, essential_no_row) - 1
+        end_row_index = max(essential_yes_row, essential_no_row)
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id,
+            body={
+                "requests": [
+                    {
+                        "updateChartSpec": {
+                            "chartId": chart["chartId"],
+                            "spec": {
+                                "pieChart": {
+                                    "legendPosition": "TOP_LEGEND",
+                                    "domain": {
+                                        "sourceRange": {
+                                            "sources": [
+                                                {
+                                                    "sheetId": sheet_id,
+                                                    "startRowIndex": start_row_index,
+                                                    "endRowIndex": end_row_index,
+                                                    "startColumnIndex": 1,
+                                                    "endColumnIndex": 2,
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    "series": {
+                                        "sourceRange": {
+                                            "sources": [
+                                                {
+                                                    "sheetId": sheet_id,
+                                                    "startRowIndex": start_row_index,
+                                                    "endRowIndex": end_row_index,
+                                                    "startColumnIndex": 2,
+                                                    "endColumnIndex": 3,
+                                                }
+                                            ]
+                                        }
+                                    },
+                                },
+                                "hiddenDimensionStrategy": "SKIP_HIDDEN_ROWS_AND_COLUMNS",
+                                "fontName": "Roboto",
+                                "backgroundColor": {"red": 1, "green": 1, "blue": 1},
+                                "backgroundColorStyle": {"rgbColor": {"red": 1, "green": 1, "blue": 1}},
+                            },
+                        }
+                    }
+                ]
+            },
+        ).execute()
+
+    def _find_sheet_chart(self, service, sheet_name: str, anchor_row_index: int, anchor_column_index: int) -> dict | None:
+        response = service.spreadsheets().get(
+            spreadsheetId=self.spreadsheet_id,
+            fields="sheets(properties(title),charts(chartId,position))",
+        ).execute()
+        for sheet in response.get("sheets", []):
+            if sheet.get("properties", {}).get("title") != sheet_name:
+                continue
+            for chart in sheet.get("charts", []):
+                anchor = chart.get("position", {}).get("overlayPosition", {}).get("anchorCell", {})
+                if anchor.get("rowIndex") == anchor_row_index and anchor.get("columnIndex") == anchor_column_index:
+                    return chart
+        return None
 
     def _find_label_row(
         self,

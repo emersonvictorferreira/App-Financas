@@ -95,6 +95,22 @@ class GoogleSheetsServiceTests(unittest.TestCase):
         self.assertFalse(first_checkbox)
         self.assertTrue(second_checkbox)
 
+    def test_sync_essential_chart_updates_chart_range(self):
+        self.service._get_sheet_id = Mock(return_value=123)
+        self.service._find_sheet_chart = Mock(return_value={"chartId": 999})
+
+        self.service._sync_essential_chart(self.api, "ABRIL", 170, 171)
+
+        request = self.spreadsheets_api.batchUpdate.call_args.kwargs["body"]["requests"][0]["updateChartSpec"]
+        self.assertEqual(request["chartId"], 999)
+        domain = request["spec"]["pieChart"]["domain"]["sourceRange"]["sources"][0]
+        series = request["spec"]["pieChart"]["series"]["sourceRange"]["sources"][0]
+        self.assertEqual(domain["startRowIndex"], 169)
+        self.assertEqual(domain["endRowIndex"], 171)
+        self.assertEqual(domain["startColumnIndex"], 1)
+        self.assertEqual(series["startColumnIndex"], 2)
+        self.assertEqual(series["endColumnIndex"], 3)
+
     def test_aggregate_income_transactions_keeps_same_source_in_different_dates_separate(self):
         imported = [
             Transaction(description="Pix de SORIGINAL", amount=100.0, date="05/05/2026", kind="income"),
@@ -187,6 +203,7 @@ class GoogleSheetsServiceTests(unittest.TestCase):
         self.service._find_expense_end_row = Mock(return_value=160)
         self.service._find_label_row = Mock(side_effect=[76, 77, 85, 97, 170, 171, 172])
         self.service._sync_fixed_expense_block = Mock()
+        self.service._sync_essential_chart = Mock()
         self.values_api.update.return_value.execute.return_value = {}
 
         self.service._sync_month_dashboard_formulas(self.api, "ABRIL")
@@ -206,6 +223,7 @@ class GoogleSheetsServiceTests(unittest.TestCase):
         self.assertEqual(update_calls[6].kwargs["body"]["values"], [['=COUNTIF(Q79:Q160;"❌")']])
         self.assertEqual(update_calls[7].kwargs["range"], "ABRIL!C172")
         self.assertEqual(update_calls[7].kwargs["body"]["values"], [["=SUM(T79:T160)"]])
+        self.service._sync_essential_chart.assert_called_once_with(self.api, "ABRIL", 170, 171)
 
 
 if __name__ == "__main__":
