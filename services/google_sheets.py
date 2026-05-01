@@ -114,12 +114,7 @@ class GoogleSheetsService:
 
         self._clear_values(service, target_range)
         if batch:
-            service.spreadsheets().values().update(
-                spreadsheetId=self.spreadsheet_id,
-                range=f"{sheet_name}!L{start_row}:N{start_row + len(batch) - 1}",
-                valueInputOption="USER_ENTERED",
-                body={"values": [[row[0], row[1], row[2]] for row in (transaction.to_expense_row() for transaction in batch)]},
-            ).execute()
+            self._write_expense_core_values(service, sheet_name, start_row, [transaction.to_expense_row() for transaction in batch])
             self._normalize_expense_block_layout(service, sheet_name, start_row, start_row + len(batch) - 1)
             self._write_expense_dropdown_values(service, sheet_name, start_row, [transaction.to_expense_row() for transaction in batch])
 
@@ -623,13 +618,62 @@ class GoogleSheetsService:
         self._apply_expense_dropdown_validations(service, sheet_id, start_row, end_row)
 
         if existing_values:
-            service.spreadsheets().values().update(
-                spreadsheetId=self.spreadsheet_id,
-                range=f"{sheet_name}!L{start_row}:N{start_row + len(existing_values) - 1}",
-                valueInputOption="USER_ENTERED",
-                body={"values": [[row[0] if len(row) > 0 else "", row[1] if len(row) > 1 else "", row[2] if len(row) > 2 else ""] for row in existing_values]},
-            ).execute()
+            self._write_expense_core_values(service, sheet_name, start_row, existing_values)
             self._write_expense_dropdown_values(service, sheet_name, start_row, existing_values)
+
+    def _write_expense_core_values(self, service, sheet_name: str, start_row: int, rows: list[list[str | float]]) -> None:
+        if not rows:
+            return
+
+        last_row = start_row + len(rows) - 1
+        service.spreadsheets().values().update(
+            spreadsheetId=self.spreadsheet_id,
+            range=f"{sheet_name}!L{start_row}:L{last_row}",
+            valueInputOption="USER_ENTERED",
+            body={"values": [[str(row[0] if len(row) > 0 else "")] for row in rows]},
+        ).execute()
+        service.spreadsheets().values().update(
+            spreadsheetId=self.spreadsheet_id,
+            range=f"{sheet_name}!N{start_row}:N{last_row}",
+            valueInputOption="USER_ENTERED",
+            body={"values": [[str(row[2] if len(row) > 2 else "")] for row in rows]},
+        ).execute()
+
+        sheet_id = self._get_sheet_id(service, sheet_name)
+        request_rows = []
+        for row in rows:
+            request_rows.append(
+                {
+                    "values": [
+                        {
+                            "userEnteredValue": {
+                                "numberValue": _as_float(row[1] if len(row) > 1 else 0),
+                            }
+                        }
+                    ]
+                }
+            )
+
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id,
+            body={
+                "requests": [
+                    {
+                        "updateCells": {
+                            "rows": request_rows,
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": start_row - 1,
+                                "endRowIndex": start_row - 1 + len(request_rows),
+                                "startColumnIndex": 12,
+                                "endColumnIndex": 13,
+                            },
+                            "fields": "userEnteredValue",
+                        }
+                    }
+                ]
+            },
+        ).execute()
 
     def _write_expense_dropdown_values(self, service, sheet_name: str, start_row: int, rows: list[list[str | float]]) -> None:
         if not rows:

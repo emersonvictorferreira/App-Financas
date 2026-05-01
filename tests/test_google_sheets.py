@@ -59,6 +59,20 @@ class GoogleSheetsServiceTests(unittest.TestCase):
 
         self.assertEqual(inserted, 0)
 
+    def test_write_expense_core_values_sends_numeric_amounts(self):
+        self.values_api.update.return_value.execute.return_value = {}
+
+        self.service._write_expense_core_values(
+            self.api,
+            "ABRIL",
+            81,
+            [["Pix para A", "R$ 50,00", "'01/04/2026", "Cat", "Pix", "âœ”ï¸"]],
+        )
+
+        batch_request = self.spreadsheets_api.batchUpdate.call_args.kwargs["body"]["requests"][0]["updateCells"]
+        number_value = batch_request["rows"][0]["values"][0]["userEnteredValue"]["numberValue"]
+        self.assertEqual(number_value, 50.0)
+
     def test_aggregate_income_transactions_keeps_same_source_in_different_dates_separate(self):
         imported = [
             Transaction(description="Pix de SORIGINAL", amount=100.0, date="05/05/2026", kind="income"),
