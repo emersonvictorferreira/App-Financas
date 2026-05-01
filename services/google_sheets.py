@@ -837,7 +837,88 @@ class GoogleSheetsService:
             valueInputOption="USER_ENTERED",
             body={"values": [[f"=SUM(I{fixed_row}:I{variable_row})"]]},
         ).execute()
+        self._sync_fixed_expense_block(service, sheet_name, expense_start_row, expense_end_row)
         self._sync_expense_auxiliary_formulas(service, sheet_name, expense_start_row, expense_end_row)
+
+    def _sync_fixed_expense_block(self, service, sheet_name: str, expense_start_row: int, expense_end_row: int) -> None:
+        fixed_values = self._get_range_values(service, f"{sheet_name}!S{expense_start_row}:X{expense_end_row}")
+        if not fixed_values:
+            return
+
+        amount_rows = []
+        checkbox_rows = []
+        has_amounts = False
+        for row in fixed_values:
+            raw_amount = row[1] if len(row) > 1 else ""
+            if str(raw_amount).strip():
+                has_amounts = True
+                amount_rows.append([_as_float(raw_amount)])
+            else:
+                amount_rows.append([""])
+
+            raw_paid = row[5] if len(row) > 5 else False
+            checkbox_rows.append(
+                {
+                    "values": [
+                        {
+                            "userEnteredValue": {
+                                "boolValue": _as_bool(raw_paid),
+                            }
+                        }
+                    ]
+                }
+            )
+
+        if has_amounts:
+            service.spreadsheets().values().update(
+                spreadsheetId=self.spreadsheet_id,
+                range=f"{sheet_name}!T{expense_start_row}:T{expense_end_row}",
+                valueInputOption="USER_ENTERED",
+                body={"values": amount_rows},
+            ).execute()
+
+        sheet_id = self._get_sheet_id(service, sheet_name)
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id,
+            body={
+                "requests": [
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": expense_start_row - 1,
+                                "endRowIndex": expense_end_row,
+                                "startColumnIndex": 23,
+                                "endColumnIndex": 24,
+                            },
+                            "cell": {
+                                "dataValidation": {
+                                    "condition": {
+                                        "type": "BOOLEAN",
+                                    },
+                                    "strict": True,
+                                    "showCustomUi": True,
+                                }
+                            },
+                            "fields": "dataValidation",
+                        }
+                    },
+                    {
+                        "updateCells": {
+                            "rows": checkbox_rows,
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": expense_start_row - 1,
+                                "endRowIndex": expense_end_row,
+                                "startColumnIndex": 23,
+                                "endColumnIndex": 24,
+                            },
+                            "fields": "userEnteredValue",
+                        }
+                    },
+                ]
+            },
+        ).execute()
 
     def _sync_expense_auxiliary_formulas(self, service, sheet_name: str, expense_start_row: int, expense_end_row: int) -> None:
         try:
@@ -1031,6 +1112,14 @@ def _as_float(value) -> float:
         return 0.0
     text = text.replace("R$", "").replace(".", "").replace(",", ".").strip()
     return round(float(text), 2)
+
+
+def _as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    normalized = _normalized_text(value)
+    return normalized in {"true", "verdadeiro", "sim", "1"}
 
 
 def _looks_like_date(value: str) -> bool:

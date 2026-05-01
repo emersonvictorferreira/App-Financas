@@ -73,6 +73,28 @@ class GoogleSheetsServiceTests(unittest.TestCase):
         number_value = batch_request["rows"][0]["values"][0]["userEnteredValue"]["numberValue"]
         self.assertEqual(number_value, 50.0)
 
+    def test_sync_fixed_expense_block_converts_amounts_and_checkboxes(self):
+        self.service._get_range_values = Mock(
+            return_value=[
+                ["Internet", "R$ 110,00", "20/04/2026", "Cat", "Pix", "FALSE"],
+                ["Convenio", 200, "20/04/2026", "Cat", "Pix", True],
+            ]
+        )
+        self.service._get_sheet_id = Mock(return_value=123)
+        self.values_api.update.return_value.execute.return_value = {}
+
+        self.service._sync_fixed_expense_block(self.api, "MAIO", 22, 23)
+
+        amount_call = self.values_api.update.call_args_list[0]
+        self.assertEqual(amount_call.kwargs["range"], "MAIO!T22:T23")
+        self.assertEqual(amount_call.kwargs["body"]["values"], [[110.0], [200.0]])
+
+        checkbox_request = self.spreadsheets_api.batchUpdate.call_args.kwargs["body"]["requests"][1]["updateCells"]
+        first_checkbox = checkbox_request["rows"][0]["values"][0]["userEnteredValue"]["boolValue"]
+        second_checkbox = checkbox_request["rows"][1]["values"][0]["userEnteredValue"]["boolValue"]
+        self.assertFalse(first_checkbox)
+        self.assertTrue(second_checkbox)
+
     def test_aggregate_income_transactions_keeps_same_source_in_different_dates_separate(self):
         imported = [
             Transaction(description="Pix de SORIGINAL", amount=100.0, date="05/05/2026", kind="income"),
@@ -164,6 +186,7 @@ class GoogleSheetsServiceTests(unittest.TestCase):
         self.service._find_expense_start_row = Mock(return_value=79)
         self.service._find_expense_end_row = Mock(return_value=160)
         self.service._find_label_row = Mock(side_effect=[76, 77, 85, 97, 170, 171, 172])
+        self.service._sync_fixed_expense_block = Mock()
         self.values_api.update.return_value.execute.return_value = {}
 
         self.service._sync_month_dashboard_formulas(self.api, "ABRIL")
