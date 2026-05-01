@@ -163,7 +163,7 @@ class GoogleSheetsServiceTests(unittest.TestCase):
         self.service._find_income_total_row = Mock(return_value=71)
         self.service._find_expense_start_row = Mock(return_value=79)
         self.service._find_expense_end_row = Mock(return_value=160)
-        self.service._find_label_row = Mock(side_effect=[76, 77, 85, 97])
+        self.service._find_label_row = Mock(side_effect=[76, 77, 85, 97, 170, 171, 172])
         self.values_api.update.return_value.execute.return_value = {}
 
         self.service._sync_month_dashboard_formulas(self.api, "ABRIL")
@@ -172,11 +172,17 @@ class GoogleSheetsServiceTests(unittest.TestCase):
         self.assertEqual(update_calls[0].kwargs["range"], "ABRIL!G71:I71")
         self.assertEqual(update_calls[1].kwargs["range"], "ABRIL!B9:E9")
         self.assertEqual(update_calls[2].kwargs["range"], "ABRIL!I76")
-        self.assertEqual(update_calls[2].kwargs["body"]["values"], [["=0"]])
+        self.assertEqual(update_calls[2].kwargs["body"]["values"], [["=SUMPRODUCT((X79:X160=TRUE)*T79:T160)"]])
         self.assertEqual(update_calls[3].kwargs["range"], "ABRIL!I77")
         self.assertEqual(update_calls[3].kwargs["body"]["values"], [["=SUM(M79:M160)"]])
         self.assertEqual(update_calls[4].kwargs["range"], "ABRIL!I85")
         self.assertEqual(update_calls[4].kwargs["body"]["values"], [["=SUM(I76:I77)"]])
+        self.assertEqual(update_calls[5].kwargs["range"], "ABRIL!C170")
+        self.assertEqual(update_calls[5].kwargs["body"]["values"], [['=COUNTIF(Q79:Q160;"✔️")']])
+        self.assertEqual(update_calls[6].kwargs["range"], "ABRIL!C171")
+        self.assertEqual(update_calls[6].kwargs["body"]["values"], [['=COUNTIF(Q79:Q160;"❌")']])
+        self.assertEqual(update_calls[7].kwargs["range"], "ABRIL!C172")
+        self.assertEqual(update_calls[7].kwargs["body"]["values"], [["=SUM(T79:T160)"]])
 
 
 if __name__ == "__main__":

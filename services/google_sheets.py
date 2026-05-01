@@ -216,6 +216,8 @@ class GoogleSheetsService:
             elif saw_expense and not row:
                 return row_number - 1
             row_number += 1
+        if saw_expense:
+            return row_number - 1
         return row_count
 
     def _insert_rows_before(self, service, sheet_name: str, row_number: int, amount: int) -> None:
@@ -821,7 +823,7 @@ class GoogleSheetsService:
             spreadsheetId=self.spreadsheet_id,
             range=f"{sheet_name}!I{fixed_row}",
             valueInputOption="USER_ENTERED",
-            body={"values": [["=0"]]},
+            body={"values": [[f"=SUMPRODUCT((X{expense_start_row}:X{expense_end_row}=TRUE)*T{expense_start_row}:T{expense_end_row})"]]},
         ).execute()
         service.spreadsheets().values().update(
             spreadsheetId=self.spreadsheet_id,
@@ -835,6 +837,41 @@ class GoogleSheetsService:
             valueInputOption="USER_ENTERED",
             body={"values": [[f"=SUM(I{fixed_row}:I{variable_row})"]]},
         ).execute()
+        self._sync_expense_auxiliary_formulas(service, sheet_name, expense_start_row, expense_end_row)
+
+    def _sync_expense_auxiliary_formulas(self, service, sheet_name: str, expense_start_row: int, expense_end_row: int) -> None:
+        try:
+            essential_yes_row = self._find_label_row(service, sheet_name, "B", "✔️", expense_end_row, expense_end_row + 40)
+            service.spreadsheets().values().update(
+                spreadsheetId=self.spreadsheet_id,
+                range=f"{sheet_name}!C{essential_yes_row}",
+                valueInputOption="USER_ENTERED",
+                body={"values": [[f'=COUNTIF(Q{expense_start_row}:Q{expense_end_row};"✔️")']]},
+            ).execute()
+        except ValueError:
+            pass
+
+        try:
+            essential_no_row = self._find_label_row(service, sheet_name, "B", "❌", expense_end_row, expense_end_row + 40)
+            service.spreadsheets().values().update(
+                spreadsheetId=self.spreadsheet_id,
+                range=f"{sheet_name}!C{essential_no_row}",
+                valueInputOption="USER_ENTERED",
+                body={"values": [[f'=COUNTIF(Q{expense_start_row}:Q{expense_end_row};"❌")']]},
+            ).execute()
+        except ValueError:
+            pass
+
+        try:
+            committed_income_row = self._find_label_row(service, sheet_name, "B", "renda comprometida", expense_end_row, expense_end_row + 40)
+            service.spreadsheets().values().update(
+                spreadsheetId=self.spreadsheet_id,
+                range=f"{sheet_name}!C{committed_income_row}",
+                valueInputOption="USER_ENTERED",
+                body={"values": [[f"=SUM(T{expense_start_row}:T{expense_end_row})"]]},
+            ).execute()
+        except ValueError:
+            pass
 
     def _find_label_row(
         self,
