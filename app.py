@@ -11,7 +11,9 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
 from services.google_sheets import GoogleSheetsService
+from services.import_history import ImportHistoryService
 from services.pdf_parser import parse_statement_pdf
+from services.pdf_parser import Transaction
 from services.pluggy import PluggyClient
 
 
@@ -20,6 +22,7 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / os.getenv("UPLOAD_DIR", "uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
+HISTORY_PATH = BASE_DIR / "data" / "import_history.json"
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-secret-key")
@@ -48,6 +51,10 @@ def get_pluggy_client() -> PluggyClient:
     )
 
 
+def get_import_history_service() -> ImportHistoryService:
+    return ImportHistoryService(HISTORY_PATH)
+
+
 @app.get("/")
 def index():
     return render_template("index.html")
@@ -58,9 +65,45 @@ def health():
     return jsonify({"ok": True, "message": "Servidor online."})
 
 
+@app.get("/api/import-history")
+def import_history():
+    history = get_import_history_service()
+    return jsonify({"ok": True, "entries": history.list_entries()})
+
+
 @app.get("/favicon.ico")
 def favicon():
     return Response(status=204)
+
+
+@app.post("/api/preview-pdf")
+def preview_pdf():
+    uploaded = request.files.get("pdf")
+    if not uploaded or not uploaded.filename:
+        return jsonify({"ok": False, "message": "Selecione um PDF para visualizar."}), 400
+
+    if not uploaded.filename.lower().endswith(".pdf"):
+        return jsonify({"ok": False, "message": "Envie um arquivo PDF valido."}), 400
+
+    filename = secure_filename(uploaded.filename)
+    destination = UPLOAD_DIR / filename
+    uploaded.save(destination)
+
+    try:
+        transactions = parse_statement_pdf(destination)
+    except Exception as exc:
+        return jsonify({"ok": False, "message": f"Erro ao ler o PDF: {exc}", "transactions": []}), 500
+    finally:
+        destination.unlink(missing_ok=True)
+
+    return jsonify(
+        {
+            "ok": True,
+            "message": "Prévia gerada com sucesso.",
+            "summary": _build_transaction_summary(transactions),
+            "transactions": [transaction.to_dict() for transaction in transactions],
+        }
+    )
 
 
 @app.post("/api/upload-pdf")
@@ -91,6 +134,20 @@ def upload_pdf():
 
         inserted_rows = sheets.append_transactions(transactions)
         warnings = getattr(sheets, "last_warnings", [])
+        entry = get_import_history_service().record_import(
+            source_type="pluggy",
+            source_name="Pluggy",
+            inserted_rows=inserted_rows,
+            transactions=transactions,
+            warnings=warnings,
+        )
+        entry = get_import_history_service().record_import(
+            source_type="pdf",
+            source_name=uploaded.filename,
+            inserted_rows=inserted_rows,
+            transactions=transactions,
+            warnings=warnings,
+        )
     except HttpError as exc:
         return _google_error_response(exc, transactions)
     except Exception as exc:
@@ -109,6 +166,7 @@ def upload_pdf():
             "ok": True,
             "message": _upload_success_message(inserted_rows, warnings),
             "transactions": [transaction.to_dict() for transaction in transactions],
+            "history_entry": entry,
         }
     )
 
@@ -152,6 +210,51 @@ def sync_pluggy():
             "ok": True,
             "message": _sync_success_message(inserted_rows, warnings),
             "transactions": [transaction.to_dict() for transaction in transactions],
+            "history_entry": entry,
+        }
+    )
+
+
+@app.post("/api/reprocess-month")
+def reprocess_month():
+    payload = request.get_json(silent=True) or {}
+    month_name = str(payload.get("month") or "").strip().upper()
+    entry_id = str(payload.get("entry_id") or "").strip()
+    if not month_name and not entry_id:
+        return jsonify({"ok": False, "message": "Informe o mês ou o histórico para reprocessar."}), 400
+
+    history = get_import_history_service()
+    entry = history.get_entry(entry_id) if entry_id else history.latest_entry_for_month(month_name)
+    if not entry:
+        return jsonify({"ok": False, "message": "Nenhum histórico encontrado para esse mês."}), 404
+
+    target_month = month_name or str(entry.get("months", [""])[0]).upper()
+    entry_transactions = [_transaction_from_dict(item) for item in entry.get("transactions", [])]
+    month_transactions = [transaction for transaction in entry_transactions if _month_name_from_date(transaction.date) == target_month]
+    if not month_transactions:
+        return jsonify({"ok": False, "message": "Esse histórico não possui lançamentos para o mês solicitado."}), 400
+
+    sheets = get_google_sheets_service()
+    try:
+        replaced_rows = sheets.replace_month_transactions(target_month, month_transactions)
+        warnings = getattr(sheets, "last_warnings", [])
+    except HttpError as exc:
+        return _google_error_response(exc, month_transactions)
+    except Exception as exc:
+        return jsonify(
+            {
+                "ok": False,
+                "message": f"Erro ao reprocessar o mês: {exc}",
+                "transactions": [transaction.to_dict() for transaction in month_transactions],
+            }
+        ), 500
+
+    return jsonify(
+        {
+            "ok": True,
+            "message": _reprocess_success_message(target_month, replaced_rows, warnings),
+            "transactions": [transaction.to_dict() for transaction in month_transactions],
+            "history_entry": entry,
         }
     )
 
@@ -201,6 +304,59 @@ def _sync_success_message(inserted_rows: int, warnings: list[str]) -> str:
     if warnings:
         return f"{message} Observacao: a planilha foi atualizada, mas houve um ajuste secundario pendente."
     return message
+
+
+def _reprocess_success_message(month_name: str, replaced_rows: int, warnings: list[str]) -> str:
+    message = f"{replaced_rows} lancamentos reprocessados em {month_name}."
+    if warnings:
+        return f"{message} Observacao: a planilha foi atualizada, mas houve um ajuste secundario pendente."
+    return message
+
+
+def _build_transaction_summary(transactions: list[Transaction]) -> dict:
+    income = [transaction for transaction in transactions if transaction.kind == "income"]
+    expense = [transaction for transaction in transactions if transaction.kind == "expense"]
+    months = sorted({_month_name_from_date(transaction.date) for transaction in transactions})
+    return {
+        "transaction_count": len(transactions),
+        "income_count": len(income),
+        "income_total": round(sum(transaction.amount for transaction in income), 2),
+        "expense_count": len(expense),
+        "expense_total": round(sum(transaction.amount for transaction in expense), 2),
+        "months": months,
+    }
+
+
+def _transaction_from_dict(payload: dict) -> Transaction:
+    return Transaction(
+        description=str(payload.get("description", "")),
+        amount=float(payload.get("amount", 0) or 0),
+        date=str(payload.get("date", "")),
+        category=str(payload.get("category", "🧾 Outros")),
+        payment_method=str(payload.get("payment_method", "💸 Dinheiro / Pix")),
+        essential=str(payload.get("essential", "✔️")),
+        kind=str(payload.get("kind", "expense")),
+    )
+
+
+def _month_name_from_date(date_str: str) -> str:
+    from datetime import datetime
+
+    months = {
+        1: "JANEIRO",
+        2: "FEVEREIRO",
+        3: "MARCO",
+        4: "ABRIL",
+        5: "MAIO",
+        6: "JUNHO",
+        7: "JULHO",
+        8: "AGOSTO",
+        9: "SETEMBRO",
+        10: "OUTUBRO",
+        11: "NOVEMBRO",
+        12: "DEZEMBRO",
+    }
+    return months[datetime.strptime(date_str, "%d/%m/%Y").month]
 
 
 if __name__ == "__main__":

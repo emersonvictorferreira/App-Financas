@@ -114,6 +114,78 @@ h1 {
   line-height: 1.4;
 }
 
+.hidden {
+  display: none;
+}
+
+.preview-card {
+  margin-top: 20px;
+  padding: 16px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid var(--line);
+}
+
+.preview-summary {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.preview-metric {
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(18, 106, 82, 0.06);
+  border: 1px solid rgba(18, 106, 82, 0.1);
+}
+
+.preview-label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-bottom: 4px;
+}
+
+.preview-value {
+  display: block;
+  font-weight: 700;
+}
+
+.preview-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.primary-button,
+.inline-button,
+.history-action {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 10px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.primary-button {
+  background: var(--accent);
+  color: #fff;
+  border-color: transparent;
+}
+
+.inline-button,
+.history-action {
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--ink);
+}
+
 .result-card {
   margin-top: 20px;
   padding-top: 12px;
@@ -154,6 +226,24 @@ h1 {
   border: 1px solid var(--line);
 }
 
+.history-item {
+  display: grid;
+  gap: 8px;
+}
+
+.history-topline {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.history-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .result-item strong {
   display: block;
   margin-bottom: 4px;
@@ -170,5 +260,9 @@ h1 {
   .hero-card {
     padding: 24px 18px;
     border-radius: 24px;
+  }
+
+  .preview-grid {
+    grid-template-columns: 1fr;
   }
 }

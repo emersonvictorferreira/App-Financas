@@ -9,36 +9,57 @@
   <body>
     <main class="app-shell">
       <section class="hero-card">
-        <p class="eyebrow">Automação financeira</p>
+        <p class="eyebrow">Automacao financeira</p>
         <h1>Seu extrato direto no Google Sheets</h1>
         <p class="lead">
-          Um app simples para celular, com dois botões: importar PDF do banco ou atualizar os dados via Pluggy.
+          Um app simples para celular, com dois botoes: importar PDF do banco ou atualizar os dados via Pluggy.
         </p>
 
         <div class="action-grid">
           <label class="action-card">
             <input id="pdf-input" type="file" accept="application/pdf" hidden>
             <span class="action-title">Enviar PDF</span>
-            <span class="action-copy">Escolha o extrato e envie para a aba do mês certo.</span>
+            <span class="action-copy">Escolha o extrato e envie para a aba do mes certo.</span>
           </label>
 
           <button id="pluggy-button" class="action-card button-card" type="button">
             <span class="action-title">Atualizar Pluggy</span>
-            <span class="action-copy">Busca transações online e lança tudo automaticamente.</span>
+            <span class="action-copy">Busca transacoes online e lanca tudo automaticamente.</span>
           </button>
         </div>
 
+        <section id="preview-card" class="preview-card hidden">
+          <div class="result-header">
+            <h2>Previa da importacao</h2>
+            <button id="preview-cancel" class="inline-button" type="button">Cancelar</button>
+          </div>
+          <div id="preview-summary" class="preview-summary"></div>
+          <div class="preview-actions">
+            <button id="preview-confirm" class="primary-button" type="button">Confirmar envio</button>
+          </div>
+        </section>
+
         <div id="status" class="status-panel" aria-live="polite">
-          Conecte suas credenciais no `.env` para ativar o envio automático.
+          Conecte suas credenciais no `.env` para ativar o envio automatico.
         </div>
 
         <section class="result-card">
           <div class="result-header">
-            <h2>Últimos lançamentos</h2>
+            <h2>Ultimos lancamentos</h2>
             <span id="result-count">0 itens</span>
           </div>
           <div id="result-list" class="result-list">
-            <p class="empty-state">Os lançamentos importados vão aparecer aqui.</p>
+            <p class="empty-state">Os lancamentos importados vao aparecer aqui.</p>
+          </div>
+        </section>
+
+        <section class="result-card">
+          <div class="result-header">
+            <h2>Historico</h2>
+            <span id="history-count">0 itens</span>
+          </div>
+          <div id="history-list" class="result-list">
+            <p class="empty-state">As ultimas importacoes vao aparecer aqui.</p>
           </div>
         </section>
       </section>

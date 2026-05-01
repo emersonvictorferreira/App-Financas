@@ -69,6 +69,32 @@ class GoogleSheetsService:
                 self.last_warnings.append(f"{sheet_name}: {exc}")
         return total_rows
 
+    def replace_month_transactions(self, month_name: str, transactions: Iterable[Transaction]) -> int:
+        self._sheet_metadata_cache = {}
+        self.last_warnings = []
+        sheet_name = _normalize_sheet_name(month_name)
+        month_transactions = list(transactions)
+        service = self._build_service()
+
+        income_transactions = [transaction for transaction in month_transactions if transaction.kind == "income"]
+        expense_transactions = [transaction for transaction in month_transactions if transaction.kind == "expense"]
+
+        income_total_row = self._find_income_total_row(service, sheet_name)
+        self._clear_values(service, f"{sheet_name}!G4:I{income_total_row - 1}")
+
+        expense_start_row = self._find_expense_start_row(service, sheet_name)
+        expense_end_row = self._find_expense_end_row(service, sheet_name, expense_start_row)
+        self._clear_values(service, f"{sheet_name}!L{expense_start_row}:Q{expense_end_row}")
+
+        replaced_rows = 0
+        replaced_rows += self._write_expenses(service, month_name, _sort_transactions(expense_transactions))
+        replaced_rows += self._write_incomes(service, month_name, _sort_transactions(income_transactions))
+        try:
+            self._sync_month_dashboard_formulas(service, sheet_name)
+        except Exception as exc:
+            self.last_warnings.append(f"{sheet_name}: {exc}")
+        return replaced_rows
+
     def _write_expenses(self, service, month_name: str, transactions: list[Transaction]) -> int:
         sheet_name = _normalize_sheet_name(month_name)
         start_row = self._find_expense_start_row(service, sheet_name)

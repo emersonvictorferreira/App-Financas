@@ -19,9 +19,12 @@ class UploadCleanupTests(unittest.TestCase):
         fake_sheets = Mock()
         fake_sheets.is_configured.return_value = True
         fake_sheets.append_transactions.return_value = 1
+        fake_history = Mock()
+        fake_history.record_import.return_value = {"id": "history-1"}
 
         with patch("app.parse_statement_pdf", return_value=[Transaction(description="Pix", amount=10.0, date="01/04/2026")]), \
-            patch("app.get_google_sheets_service", return_value=fake_sheets):
+            patch("app.get_google_sheets_service", return_value=fake_sheets), \
+            patch("app.get_import_history_service", return_value=fake_history):
             with app.test_client() as client:
                 response = client.post(
                     "/api/upload-pdf",
@@ -37,9 +40,12 @@ class UploadCleanupTests(unittest.TestCase):
         fake_sheets.is_configured.return_value = True
         fake_sheets.append_transactions.return_value = 2
         fake_sheets.last_warnings = ["ABRIL: ajuste secundario"]
+        fake_history = Mock()
+        fake_history.record_import.return_value = {"id": "history-2"}
 
         with patch("app.parse_statement_pdf", return_value=[Transaction(description="Pix", amount=10.0, date="01/04/2026")]), \
-            patch("app.get_google_sheets_service", return_value=fake_sheets):
+            patch("app.get_google_sheets_service", return_value=fake_sheets), \
+            patch("app.get_import_history_service", return_value=fake_history):
             with app.test_client() as client:
                 response = client.post(
                     "/api/upload-pdf",
